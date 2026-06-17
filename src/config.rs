@@ -10,6 +10,7 @@ pub struct Config {
     pub embeddings: EmbeddingsConfig,
     pub language: LanguageConfig,
     pub cache: CacheConfig,
+    pub storage: StorageConfig,
     pub tools: ToolsConfig,
     pub webhook: WebhookConfig,
     pub http: HttpConfig,
@@ -282,6 +283,63 @@ impl Default for CacheConfig {
             evictor_interval_secs: 30,
             auto_refresh: false,
             hash_prefix_bytes: 64 * 1024,
+        }
+    }
+}
+
+/// `[storage]` — backend for the main triple store.
+///
+/// `"memory"` (default) keeps the active ontology in RAM only — fast, but
+/// every restart starts empty. `"persistent"` opens a RocksDB-backed
+/// Oxigraph store at `<data_dir>/triplestore`, so triples survive restarts
+/// and the one-shot CLI subcommands (`load` then `query`) share state.
+///
+/// Override the mode at runtime with `OPEN_ONTOLOGIES_STORAGE_MODE`.
+///
+/// Oxigraph allows only one read-write handle on a persistent store at a
+/// time — running two server processes against the same `data_dir` will
+/// fail to open the second store.
+#[derive(Debug, Deserialize, Clone)]
+#[serde(default)]
+pub struct StorageConfig {
+    /// `"memory"` or `"persistent"`. Default `"memory"`.
+    pub mode: String,
+}
+
+impl Default for StorageConfig {
+    fn default() -> Self {
+        Self {
+            mode: "memory".into(),
+        }
+    }
+}
+
+/// Storage backend selected for the main graph.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StorageMode {
+    Memory,
+    Persistent,
+}
+
+/// Resolve the storage mode.
+///
+/// Precedence: `OPEN_ONTOLOGIES_STORAGE_MODE` env var > config > default
+/// (`memory`). Unknown values fall back to `memory` with a warning printed to
+/// stderr — preserves the historical in-memory behaviour for typos.
+pub fn resolve_storage_mode(cfg: &StorageConfig) -> StorageMode {
+    let raw = std::env::var("OPEN_ONTOLOGIES_STORAGE_MODE")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .unwrap_or_else(|| cfg.mode.clone());
+    match raw.trim().to_lowercase().as_str() {
+        "memory" | "mem" | "in-memory" | "" => StorageMode::Memory,
+        "persistent" | "disk" | "rocksdb" => StorageMode::Persistent,
+        other => {
+            eprintln!(
+                "warning: unknown [storage] mode {:?}; falling back to \"memory\"",
+                other
+            );
+            StorageMode::Memory
         }
     }
 }

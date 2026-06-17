@@ -37,6 +37,14 @@ data_dir = "~/.open-ontologies"
 # # cache fingerprint tie-breaker. Increase for very large dumps.
 # hash_prefix_bytes = 65536
 
+# [storage]
+# Backend for the main triple store.
+#   mode = "memory"      # in-memory (default; lost on restart)
+#   mode = "persistent"  # RocksDB at <data_dir>/triplestore; survives restarts
+# Override at runtime with OPEN_ONTOLOGIES_STORAGE_MODE or `--storage-mode`.
+# Note: only one server process can hold the persistent store open at a time.
+# mode = "memory"
+
 # [tools]
 # Restrict which MCP tools are exposed by this server.
 # mode = "all" | "allow" | "deny"
@@ -206,6 +214,11 @@ enum Commands {
         /// When set, every read tool checks the source file for changes and recompiles.
         #[arg(long)]
         auto_refresh: bool,
+        /// Storage backend for the main triple store: `memory` (default,
+        /// in-memory) or `persistent` (RocksDB at `<data_dir>/triplestore`).
+        /// CLI > `OPEN_ONTOLOGIES_STORAGE_MODE` env > `[storage] mode`.
+        #[arg(long)]
+        storage_mode: Option<String>,
     },
     /// Start the MCP server (Streamable HTTP transport)
     ServeHttp {
@@ -246,6 +259,11 @@ enum Commands {
         /// When set, every read tool checks the source file for changes and recompiles.
         #[arg(long)]
         auto_refresh: bool,
+        /// Storage backend for the main triple store: `memory` (default,
+        /// in-memory) or `persistent` (RocksDB at `<data_dir>/triplestore`).
+        /// CLI > `OPEN_ONTOLOGIES_STORAGE_MODE` env > `[storage] mode`.
+        #[arg(long)]
+        storage_mode: Option<String>,
     },
 
     /// Start unix socket server for Tardygrada fact grounding
@@ -542,8 +560,41 @@ fn setup(data_dir: &str) -> anyhow::Result<(StateDb, Arc<GraphStore>)> {
     std::fs::create_dir_all(data_path)?;
     let db_path = data_path.join("open-ontologies.db");
     let db = StateDb::open(&db_path)?;
-    let graph = Arc::new(GraphStore::new());
+    // One-shot CLI subcommands respect the same [storage] setting as the
+    // server modes (loaded from `<data_dir>/config.toml` if present). This is
+    // what makes `open-ontologies load foo.ttl` + `open-ontologies query ...`
+    // share state when persistence is enabled.
+    let cfg_path = data_path.join("config.toml");
+    let storage_cfg = open_ontologies::config::Config::load(&cfg_path)
+        .map(|c| c.storage)
+        .unwrap_or_default();
+    let graph = build_main_graph(&storage_cfg, data_path)?;
     Ok((db, graph))
+}
+
+/// Build the singleton main graph using the configured storage backend.
+///
+/// In-memory: returns an empty `GraphStore`.
+/// Persistent: opens (or creates) a RocksDB-backed store at
+/// `<data_dir>/triplestore`.
+fn build_main_graph(
+    cfg: &open_ontologies::config::StorageConfig,
+    data_dir: &std::path::Path,
+) -> anyhow::Result<Arc<GraphStore>> {
+    use open_ontologies::config::{resolve_storage_mode, StorageMode};
+    match resolve_storage_mode(cfg) {
+        StorageMode::Memory => Ok(Arc::new(GraphStore::new())),
+        StorageMode::Persistent => {
+            let path = data_dir.join("triplestore");
+            let store = GraphStore::open_persistent(&path)?;
+            tracing::info!(
+                "opened persistent triple store at {} ({} triples)",
+                path.display(),
+                store.triple_count()
+            );
+            Ok(Arc::new(store))
+        }
+    }
 }
 
 fn output_json(value: &serde_json::Value, pretty: bool) {
@@ -808,6 +859,7 @@ async fn async_main() -> anyhow::Result<()> {
             tools_deny,
             idle_ttl_secs,
             auto_refresh,
+            storage_mode,
         } => {
             let config_path = expand_tilde(&config_path);
             let cfg = match Config::load(std::path::Path::new(&config_path)) {
@@ -828,12 +880,17 @@ async fn async_main() -> anyhow::Result<()> {
             open_ontologies::runtime::init_from_config(&cfg);
 
             let data_dir = expand_tilde(&cfg.general.data_dir);
-            let db_path = std::path::Path::new(&data_dir).join("open-ontologies.db");
+            let data_path = std::path::Path::new(&data_dir);
+            let db_path = data_path.join("open-ontologies.db");
 
-            std::fs::create_dir_all(&data_dir)?;
+            std::fs::create_dir_all(data_path)?;
             let db = StateDb::open(&db_path)?;
 
-            let graph = Arc::new(GraphStore::new());
+            let mut storage_cfg = cfg.storage.clone();
+            if let Some(m) = storage_mode.as_deref() {
+                storage_cfg.mode = m.to_string();
+            }
+            let graph = build_main_graph(&storage_cfg, data_path)?;
 
             // Monitor: CLI `--watch` forces enabled; otherwise fall back to
             // `[monitor] enabled`. CLI `--watch-interval` > env > `[monitor]
@@ -892,6 +949,7 @@ async fn async_main() -> anyhow::Result<()> {
             tools_deny,
             idle_ttl_secs,
             auto_refresh,
+            storage_mode,
         } => {
             use rmcp::transport::streamable_http_server::{
                 StreamableHttpServerConfig, StreamableHttpService,
@@ -927,12 +985,17 @@ async fn async_main() -> anyhow::Result<()> {
             let token = token.or_else(|| open_ontologies::config::resolve_http_token(&cfg.http));
 
             let data_dir = expand_tilde(&cfg.general.data_dir);
-            let db_path_owned = std::path::Path::new(&data_dir).join("open-ontologies.db");
+            let data_path_owned = std::path::PathBuf::from(&data_dir);
+            let db_path_owned = data_path_owned.join("open-ontologies.db");
 
-            std::fs::create_dir_all(&data_dir)?;
+            std::fs::create_dir_all(&data_path_owned)?;
 
             // Shared graph store — all MCP sessions (agent + frontend) see the same triples
-            let shared_graph = Arc::new(GraphStore::new());
+            let mut storage_cfg = cfg.storage.clone();
+            if let Some(m) = storage_mode.as_deref() {
+                storage_cfg.mode = m.to_string();
+            }
+            let shared_graph = build_main_graph(&storage_cfg, &data_path_owned)?;
 
             // Shared StateDb for lineage REST endpoint
             let shared_db = StateDb::open(&db_path_owned)?;
