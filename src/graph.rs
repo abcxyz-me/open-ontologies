@@ -111,7 +111,7 @@ impl GraphStore {
 
     pub fn load_file(&self, path: &str) -> anyhow::Result<usize> {
         let content = std::fs::read_to_string(path)?;
-        let format = Self::detect_format(path);
+        let format = Self::detect_format_sniffed(path, &content);
         let store = self.store.lock().unwrap();
         let reader = Cursor::new(content.as_bytes());
         let parser = RdfParser::from_format(format).for_reader(reader);
@@ -142,7 +142,7 @@ impl GraphStore {
 
     pub fn validate_file(path: &str) -> anyhow::Result<usize> {
         let content = std::fs::read_to_string(path)?;
-        let format = Self::detect_format(path);
+        let format = Self::detect_format_sniffed(path, &content);
         let reader = Cursor::new(content.as_bytes());
         let parser = RdfParser::from_format(format).for_reader(reader);
         let mut count = 0;
@@ -471,6 +471,41 @@ impl GraphStore {
         } else {
             RdfFormat::Turtle
         }
+    }
+
+    /// Format detection that consults the file body, not just the extension.
+    ///
+    /// `.owl` is ambiguous in the wild: the extension says "an OWL ontology"
+    /// and says nothing about the serialisation. Both RDF/XML and Turtle are
+    /// routinely published as `.owl`, so trusting the extension alone makes a
+    /// perfectly valid file fail to parse. Sniff the first non-blank,
+    /// non-comment line and let the content decide.
+    fn detect_format_sniffed(path: &str, content: &str) -> RdfFormat {
+        let ext_format = Self::detect_format(path);
+
+        let head = content
+            .lines()
+            .map(str::trim)
+            .find(|l| !l.is_empty() && !l.starts_with('#'))
+            .unwrap_or("");
+
+        // XML declaration or an opening tag means RDF/XML regardless of name.
+        if head.starts_with("<?xml") || head.starts_with("<rdf:") || head.starts_with("<RDF") {
+            return RdfFormat::RdfXml;
+        }
+
+        // Turtle/TriG directives. `<` alone is not a signal: it also opens an
+        // N-Triples subject IRI, so only treat explicit directives as proof.
+        let is_turtle_directive = head.starts_with("@prefix")
+            || head.starts_with("@base")
+            || head.to_uppercase().starts_with("PREFIX ")
+            || head.to_uppercase().starts_with("BASE ");
+
+        if is_turtle_directive && matches!(ext_format, RdfFormat::RdfXml) {
+            return RdfFormat::Turtle;
+        }
+
+        ext_format
     }
 
     fn parse_format(name: &str) -> anyhow::Result<RdfFormat> {

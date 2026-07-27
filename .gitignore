@@ -12,3 +12,10 @@ data/
 !benchmark/ontoaxiom/data/**
 # Ignore generated OWL files in root, but keep benchmark references
 /*.owl
+
+# Reasoner benchmark artifacts (downloaded corpora, jars, generated files)
+benchmark/reasoner/corpora/
+benchmark/reasoner/lib/
+benchmark/reasoner/*.class
+benchmark/reasoner/results/
+__pycache__/

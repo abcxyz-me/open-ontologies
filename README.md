@@ -379,18 +379,42 @@ All 32 marketplace ontologies fetched, `owl:imports` resolved, loaded, and reaso
 
 32/32 ontologies loaded, imports resolved, and reasoned. RDFS adds 18% more triples. OWL-RL adds **41%** — transitive/symmetric/inverse properties and equivalentClass expansion discover significantly more implicit knowledge. Schema.org jumps from +4,031 (RDFS) to +13,670 (OWL-RL) inferred triples in 117ms.
 
-### Reasoning Performance — vs HermiT
+### Compiled Claim Verification — measured vs HermiT
 
-**LUBM Scaling (load + reason cycle)**
+The `claimcheck` module compiles an ontology **once** (inferred hierarchy +
+disjointness, including pairs derived by sound propagation rules) into
+per-class token bitsets, then verifies candidate claims — the "is this set of
+triples consistent with the ontology?" question — with **no reasoning at query
+time**: two 64-bit ANDs per class pair, witness axiom extracted for the
+explanation.
 
-| Axioms | Open Ontologies | HermiT | Speedup |
+Same ontology (canonical `pizza.owl`), same task, same machine, verdicts
+cross-checked against HermiT 1.4.3.456:
+
+| Per-claim consistency check | median | p95 | throughput |
 | --- | --- | --- | --- |
-| 1,000 | 15ms | 112ms | **7.5×** |
-| 5,000 | 14ms | 410ms | **29×** |
-| 10,000 | 14ms | 1,200ms | **86×** |
-| 50,000 | 15ms | 24,490ms | **1,633×** |
+| HermiT (warm JVM, ontology pre-loaded) | 4,936 µs | — | ~200/s |
+| **open-ontologies compiled check** | **0.3 µs** | **0.4 µs** | **3.1M/s (11.2M/s batched)** |
 
-Full benchmark writeup: [docs/benchmarks.md](docs/benchmarks.md)
+Correctness before speed:
+
+- **0 disagreements with HermiT** across 78,884 exhaustively-audited class
+  pairs (13 ontologies) and 793 structurally adversarial claims.
+- **Sound by construction**: a `Rejected` verdict is backed by a derivable
+  contradiction and names the witnessing axiom. 100% contradiction recall on
+  both fully-audited ontologies.
+- **Explicit incompleteness envelope**: anything the compiled surface cannot
+  decide returns `Undetermined` and routes to a reasoner-backed residual tier
+  — it is never guessed.
+- Closed-world vocabulary checks catch hallucinated classes/properties that
+  open-world OWL semantics structurally cannot flag.
+
+Offline compile: one classification pass (~120 ms for Pizza) via any complete
+OWL reasoner; the shipped hot path is pure Rust with no JVM dependency.
+Reproduction scripts: [benchmark/layer3-prototype/](benchmark/layer3-prototype/).
+
+Design, measurements and envelope: [docs/layer3-compiled-reasoning.md](docs/layer3-compiled-reasoning.md).
+Full benchmark methodology: [docs/benchmarks.md](docs/benchmarks.md)
 
 ### OAEI Ontology Alignment — Anatomy Track
 
