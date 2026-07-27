@@ -1,5 +1,31 @@
 # Changelog
 
+## 1.1.0 — 2026-07-27
+
+### Added
+- `claimcheck` module: compiled per-claim ontology-consistency verification.
+  Token-bitset engine (0.3 µs median per claim, 11M claims/s batched), sound
+  two-hop disjointness join with witness extraction, three-valued verdicts
+  (`Rejected` / `Undetermined` / `Consistent`), reasoner-backed residual tier
+  (`ResidualOracle`) with verdict learn-back, closed-world vocabulary checks,
+  and an assumed-disjointness WARN tier for zero-disjointness ontologies.
+  Correctness audited against HermiT: 0 disagreements over 78,884 exhaustive
+  class pairs (13 ontologies) and 793 adversarial structural claims.
+- Offline compile tooling (`benchmark/reasoner/`): `CompileOntology` with six
+  sound disjointness-propagation rules (restriction, functional, union,
+  data-value, counting, dueling-universal idioms), `DisjointnessMatrix`,
+  `ClaimConsistency`, `PairOracle`, `VetDisjointness`, `StripDisjointness`.
+
+### Changed
+- OWL-DL reasoner: satisfiability is now three-valued — resource exhaustion
+  reports `Unknown` instead of unsatisfiability; per-test (10s) and global
+  classification (180s) wall-clock budgets; pairwise blocking; output gains
+  `complete`, `undetermined_classes`, `subsumption_sweep_cut_short`, and
+  `abox.undecided`.
+- RDF loading content-sniffs `.owl` files, so Turtle published under `.owl`
+  parses correctly.
+
+
 All notable changes to Open Ontologies are documented here.
 
 ## [Unreleased]

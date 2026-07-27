@@ -103,6 +103,12 @@ pub enum Verdict {
 pub struct CheckResult {
     pub verdict: Verdict,
     pub violations: Vec<Violation>,
+    /// Assumption-based findings. A warning means an ASSUMED (not entailed)
+    /// disjointness axiom fired: the claim conflicts with vetted domain
+    /// knowledge that the ontology itself does not assert. Warnings never
+    /// change the verdict.
+    #[serde(default)]
+    pub warnings: Vec<Violation>,
     /// Class pairs the join could not settle. A caller wanting `Consistent`
     /// must discharge these with a reasoner.
     pub residual_pairs: Vec<(String, String)>,
@@ -153,6 +159,9 @@ fn bits_first_common(a: &Bits, b: &Bits) -> Option<usize> {
 struct RawData {
     subsumptions: Vec<(String, String)>,
     disjoint: Vec<(String, String)>,
+    /// Disjointness ASSUMED (e.g. LLM-proposed, reasoner-vetted), not entailed.
+    /// Drives warnings, never rejections.
+    assumed_disjoint: Vec<(String, String)>,
     declared_classes: HashSet<String>,
     declared_props: HashSet<String>,
     functional: HashSet<String>,
@@ -162,6 +171,7 @@ impl RawData {
     fn is_empty(&self) -> bool {
         self.subsumptions.is_empty()
             && self.disjoint.is_empty()
+            && self.assumed_disjoint.is_empty()
             && self.declared_classes.is_empty()
             && self.declared_props.is_empty()
             && self.functional.is_empty()
@@ -170,17 +180,60 @@ impl RawData {
 
 /// The immutable query structure. Built once per load generation; shared
 /// across threads via `Arc`, so batch checking needs no locks on the hot path.
+/// Token bitsets for one set of disjointness axioms.
+struct TokenSet {
+    pair_left: Vec<u32>,
+    pair_right: Vec<u32>,
+    l_tokens: Vec<Bits>,
+    r_tokens: Vec<Bits>,
+}
+
+impl TokenSet {
+    fn build(pairs: &[(String, String)], ids: &HashMap<String, u32>,
+             descendants: &[Vec<u32>], n: usize) -> Self {
+        let m = pairs.len();
+        let mut pair_left = Vec::with_capacity(m);
+        let mut pair_right = Vec::with_capacity(m);
+        let mut l_tokens: Vec<Bits> = (0..n).map(|_| bits_new(m)).collect();
+        let mut r_tokens: Vec<Bits> = (0..n).map(|_| bits_new(m)).collect();
+        for (k, (x, y)) in pairs.iter().enumerate() {
+            let (xi, yi) = (ids[x.as_str()], ids[y.as_str()]);
+            pair_left.push(xi);
+            pair_right.push(yi);
+            for &c in &descendants[xi as usize] {
+                bits_set(&mut l_tokens[c as usize], k);
+            }
+            for &c in &descendants[yi as usize] {
+                bits_set(&mut r_tokens[c as usize], k);
+            }
+        }
+        Self { pair_left, pair_right, l_tokens, r_tokens }
+    }
+
+    /// Two-hop join over this token set. Returns the witnessing axiom.
+    fn incompatible<'a>(&'a self, names: &'a [String], ai: usize, bi: usize)
+        -> Option<(&'a str, &'a str)> {
+        if let Some(k) = bits_first_common(&self.l_tokens[ai], &self.r_tokens[bi]) {
+            return Some((names[self.pair_left[k] as usize].as_str(),
+                         names[self.pair_right[k] as usize].as_str()));
+        }
+        if let Some(k) = bits_first_common(&self.r_tokens[ai], &self.l_tokens[bi]) {
+            return Some((names[self.pair_right[k] as usize].as_str(),
+                         names[self.pair_left[k] as usize].as_str()));
+        }
+        None
+    }
+}
+
 struct Index {
     /// IRI → interned id, for classes only.
     ids: HashMap<String, u32>,
     /// id → IRI, for witness reporting.
     names: Vec<String>,
-    /// Disjointness axioms as interned pairs; index = token.
-    pair_left: Vec<u32>,
-    pair_right: Vec<u32>,
-    /// Per class id: tokens whose left / right side subsumes this class.
-    l_tokens: Vec<Bits>,
-    r_tokens: Vec<Bits>,
+    /// Entailed disjointness (asserted + soundly derived). Drives rejections.
+    hard: TokenSet,
+    /// Assumed disjointness (proposed + vetted, not entailed). Drives warnings.
+    assumed: TokenSet,
 }
 
 impl Index {
@@ -197,7 +250,12 @@ impl Index {
             names.push(s.to_string());
             i
         };
-        for (a, b) in raw.subsumptions.iter().chain(raw.disjoint.iter()) {
+        for (a, b) in raw
+            .subsumptions
+            .iter()
+            .chain(raw.disjoint.iter())
+            .chain(raw.assumed_disjoint.iter())
+        {
             intern(a, &mut ids, &mut names);
             intern(b, &mut ids, &mut names);
         }
@@ -221,48 +279,25 @@ impl Index {
             }
         }
 
-        // Tokenise disjointness and stamp the bitsets down both hierarchies.
-        let m = raw.disjoint.len();
-        let mut pair_left = Vec::with_capacity(m);
-        let mut pair_right = Vec::with_capacity(m);
-        let mut l_tokens: Vec<Bits> = (0..n).map(|_| bits_new(m)).collect();
-        let mut r_tokens: Vec<Bits> = (0..n).map(|_| bits_new(m)).collect();
-        for (k, (x, y)) in raw.disjoint.iter().enumerate() {
-            let (xi, yi) = (ids[x.as_str()], ids[y.as_str()]);
-            pair_left.push(xi);
-            pair_right.push(yi);
-            for &c in &descendants[xi as usize] {
-                bits_set(&mut l_tokens[c as usize], k);
-            }
-            for &c in &descendants[yi as usize] {
-                bits_set(&mut r_tokens[c as usize], k);
-            }
-        }
+        // Tokenise both axiom sets and stamp bitsets down the hierarchies.
+        let hard = TokenSet::build(&raw.disjoint, &ids, &descendants, n);
+        let assumed = TokenSet::build(&raw.assumed_disjoint, &ids, &descendants, n);
 
-        Self { ids, names, pair_left, pair_right, l_tokens, r_tokens }
+        Self { ids, names, hard, assumed }
     }
 
-    /// The two-hop join as two bitset intersections. Returns the witnessing
-    /// disjointness axiom `(left, right)` when incompatible.
-    ///
-    /// Symmetric by construction: both orientations are tested, so callers
-    /// never need to try both argument orders.
+    /// The entailed two-hop join. `Some` means PROVEN incompatible; drives
+    /// rejections. Symmetric by construction: both orientations are tested.
     fn incompatible(&self, a: &str, b: &str) -> Option<(&str, &str)> {
         let (&ai, &bi) = (self.ids.get(a)?, self.ids.get(b)?);
-        let (ai, bi) = (ai as usize, bi as usize);
-        if let Some(k) = bits_first_common(&self.l_tokens[ai], &self.r_tokens[bi]) {
-            return Some((
-                self.names[self.pair_left[k] as usize].as_str(),
-                self.names[self.pair_right[k] as usize].as_str(),
-            ));
-        }
-        if let Some(k) = bits_first_common(&self.r_tokens[ai], &self.l_tokens[bi]) {
-            return Some((
-                self.names[self.pair_right[k] as usize].as_str(),
-                self.names[self.pair_left[k] as usize].as_str(),
-            ));
-        }
-        None
+        self.hard.incompatible(&self.names, ai as usize, bi as usize)
+    }
+
+    /// The assumed two-hop join. `Some` means the pair conflicts with a
+    /// VETTED ASSUMPTION, not an entailment; drives warnings only.
+    fn assumed_incompatible(&self, a: &str, b: &str) -> Option<(&str, &str)> {
+        let (&ai, &bi) = (self.ids.get(a)?, self.ids.get(b)?);
+        self.assumed.incompatible(&self.names, ai as usize, bi as usize)
     }
 }
 
@@ -334,6 +369,17 @@ impl CompiledOntology {
         Ok(pairs.len())
     }
 
+    /// Load ASSUMED disjointness: pairs proposed (e.g. by an LLM) and vetted
+    /// by a reasoner as admissible — consistent with the ontology but not
+    /// entailed by it. These drive warnings, never rejections; a deployment
+    /// on a zero-disjointness ontology gets its verification value from
+    /// vocabulary checks plus this tier.
+    pub fn load_assumed_disjoint(&self, pairs: &[(String, String)]) -> Result<usize> {
+        self.raw.write().unwrap().assumed_disjoint.extend_from_slice(pairs);
+        self.invalidate();
+        Ok(pairs.len())
+    }
+
     pub fn load_declared_classes(&self, iris: &[String]) -> Result<usize> {
         self.raw.write().unwrap().declared_classes.extend(iris.iter().cloned());
         self.invalidate();
@@ -364,6 +410,7 @@ impl CompiledOntology {
             return Ok(CheckResult {
                 verdict: Verdict::Undetermined,
                 violations: Vec::new(),
+                warnings: Vec::new(),
                 residual_pairs: Vec::new(),
                 elapsed_us: 0,
             });
@@ -381,6 +428,7 @@ impl CompiledOntology {
     fn check_inner(raw: &RawData, ix: &Index, claim: &Claim) -> CheckResult {
         let start = std::time::Instant::now();
         let mut violations = Vec::new();
+        let mut warnings = Vec::new();
         let mut residual = Vec::new();
 
         // 1. Closed-world vocabulary. Open-world OWL structurally cannot flag
@@ -421,7 +469,18 @@ impl CompiledOntology {
                             ),
                         });
                     } else {
-                        // NOT proven compatible. The join is incomplete.
+                        // Not PROVEN incompatible. Probe the assumption tier:
+                        // a hit is domain knowledge worth surfacing, but it is
+                        // not proof, so the verdict is untouched and the pair
+                        // still goes to the residual.
+                        if let Some((wa, wb)) = ix.assumed_incompatible(a, b) {
+                            warnings.push(Violation {
+                                check: "disjointness_assumed".into(),
+                                detail: format!(
+                                    "{subj} being both {a} and {b} conflicts with the                                      ASSUMED disjointness of {wa} and {wb} (vetted                                      assumption, not entailed by the ontology)"
+                                ),
+                            });
+                        }
                         residual.push((a.to_string(), b.to_string()));
                     }
                 }
@@ -460,6 +519,7 @@ impl CompiledOntology {
         CheckResult {
             verdict,
             violations,
+            warnings,
             residual_pairs: residual,
             elapsed_us: start.elapsed().as_micros(),
         }
@@ -476,6 +536,7 @@ impl CompiledOntology {
                 .map(|_| CheckResult {
                     verdict: Verdict::Undetermined,
                     violations: Vec::new(),
+                    warnings: Vec::new(),
                     residual_pairs: Vec::new(),
                     elapsed_us: 0,
                 })
@@ -878,6 +939,76 @@ mod tests {
         c.check_with_oracle(&claim, &o).unwrap();
         // Tier 1 alone should now settle it, with no oracle involved.
         assert_eq!(c.check(&claim).unwrap().verdict, Verdict::Rejected);
+    }
+
+
+    // ── assumed-disjointness WARN tier ──────────────────────────────────
+
+    #[test]
+    fn assumed_disjointness_warns_but_never_rejects() {
+        let c = fixture();
+        // Vetted assumption: Margherita and CheeseyPizza "should" be disjoint
+        // (deliberately false in reality — assumptions are not entailments,
+        // and the machinery must treat them accordingly).
+        c.load_assumed_disjoint(&[(iri("Margherita"), iri("CheeseyPizza"))]).unwrap();
+        let claim = Claim {
+            types: vec![("x".into(), iri("Margherita")), ("x".into(), iri("CheeseyPizza"))],
+            ..Default::default()
+        };
+        let r = c.check(&claim).unwrap();
+        assert_eq!(r.verdict, Verdict::Undetermined, "assumption must not reject: {r:?}");
+        assert_eq!(r.warnings.len(), 1, "{r:?}");
+        assert_eq!(r.warnings[0].check, "disjointness_assumed");
+        assert!(r.warnings[0].detail.contains("not entailed"));
+        // The pair still needs tier 2: nothing was proven.
+        assert_eq!(r.residual_pairs.len(), 1);
+    }
+
+    #[test]
+    fn assumed_tier_climbs_the_hierarchy() {
+        let c = fixture();
+        // Assumption at superclass level must warn for subclasses.
+        c.load_assumed_disjoint(&[(iri("NamedPizza"), iri("CheeseyPizza"))]).unwrap();
+        let claim = Claim {
+            // Margherita ⊑ NamedPizza (inferred), so the assumption applies.
+            types: vec![("x".into(), iri("Margherita")), ("x".into(), iri("CheeseyPizza"))],
+            ..Default::default()
+        };
+        let r = c.check(&claim).unwrap();
+        assert_eq!(r.warnings.len(), 1, "{r:?}");
+        assert!(r.warnings[0].detail.contains("NamedPizza"), "witness must name the assumed axiom: {r:?}");
+    }
+
+    #[test]
+    fn hard_rejection_takes_precedence_over_assumed() {
+        let c = fixture();
+        c.load_assumed_disjoint(&[(iri("Margherita"), iri("MeatyPizza"))]).unwrap();
+        let claim = Claim {
+            types: vec![("x".into(), iri("Margherita")), ("x".into(), iri("MeatyPizza"))],
+            ..Default::default()
+        };
+        let r = c.check(&claim).unwrap();
+        // Entailed disjointness fires as a rejection; no duplicate warning.
+        assert_eq!(r.verdict, Verdict::Rejected);
+        assert!(r.warnings.is_empty(), "{r:?}");
+    }
+
+    #[test]
+    fn oracle_confirmed_consistency_keeps_the_warning() {
+        let c = fixture();
+        c.load_assumed_disjoint(&[(iri("Margherita"), iri("CheeseyPizza"))]).unwrap();
+        let o = oracle(vec![], vec![]);
+        let claim = Claim {
+            types: vec![("x".into(), iri("Margherita")), ("x".into(), iri("CheeseyPizza"))],
+            ..Default::default()
+        };
+        let r = c.check_with_oracle(&claim, &o).unwrap();
+        // The reasoner proves no ENTAILED contradiction, so the claim is
+        // Consistent — but the extra-logical assumption still stands and the
+        // warning must survive, because "not entailed inconsistent" does not
+        // refute vetted domain knowledge the ontology never encoded.
+        assert_eq!(r.verdict, Verdict::Consistent, "{r:?}");
+        assert_eq!(r.warnings.len(), 1, "{r:?}");
     }
 
     // ── batch / parallelism ─────────────────────────────────────────────

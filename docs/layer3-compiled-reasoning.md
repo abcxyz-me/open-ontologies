@@ -199,3 +199,53 @@ python benchmark/layer3-prototype/verify_join_soundness.py <corpus_dir> 250
 # Rust bench (loads compiled.json)
 cargo test --release --test claimcheck_pizza_bench -- --nocapture
 ```
+
+## Counting rules R4/R5 and the assumed-disjointness WARN tier (2026-07-27)
+
+Two further sound compile rules close the counting idiom (found by reading a
+92.1%-coverage ontology's failing axioms — dueling `ExactCardinality` and
+`allValuesFrom` restrictions):
+
+```
+R4  A ⊑ ≤m R.C,  B ⊑ ≥n R.D,  n > m,  D ⊑* C (or C unqualified) ⟹ disj(A,B)
+R5  A ⊑ ∀R.(C…), B ⊑ ∀R.(D…), every Ci disjoint every Dj,
+    and A or B forces ≥1 R-successor                              ⟹ disj(A,B)
+```
+
+plus `DataExactCardinality(1, p, DataOneOf(v))` recognised as a pinned value
+for RD. Effect on the 12-ontology exhaustive audit: tier-2 residual fell from
+501 to **23 pairs of 78,884** (aggregate recall 99.83%), still **0 unsound**;
+the diagnosed ontology went 96.1% → 99.9%. Pizza and ore_ont_10230 hold at
+100%.
+
+### The WARN tier: vetted assumptions for zero-disjointness ontologies
+
+Most large real ontologies declare no disjointness, leaving the entailed
+contradiction tier empty. The WARN tier reconstructs a candidate surface under
+an explicit assumption semantics:
+
+- a proposer suggests pairs (built-in structural sibling heuristic, or an LLM
+  over MCP — the server never embeds one);
+- `VetDisjointness` (HermiT) gives each proposal a three-way verdict:
+  *entailed* (belongs in the hard tier), *inadmissible* (would break the
+  ontology), *admissible* (consistent to assume);
+- admissible pairs load via `load_assumed_disjoint` into their own token
+  bitsets and fire **warnings, never rejections** — `disjointness_assumed`,
+  witness named, explicitly labelled not-entailed. Verdicts are untouched;
+  the pair still routes to the residual.
+
+Holdout evaluation (`holdout_disjointness.py`): strip ALL disjointness, let
+the sibling heuristic + vetting reconstruct it, score the WARN closure
+against the original exhaustive matrix:
+
+| Ontology | axioms stripped | recall | precision |
+| --- | --- | --- | --- |
+| pizza.owl | 14 | 82.2% | 91.4% |
+| ore_ont_11064 | 54 | 44.3% | 92.1% |
+
+Precision is stable ~91–92%; recall depends on how much of the true surface
+is sibling-shaped. Measured precision is a **lower bound**: many "false"
+warnings (American + IceCream) are false only against entailed truth — they
+are exactly the intended-but-never-encoded disjointness the tier exists to
+surface. LLM proposals are the open slot for pushing recall past the
+structural heuristic.

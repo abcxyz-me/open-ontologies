@@ -129,6 +129,11 @@ public class CompileOntology {
         Map<String, List<String[]>> ex = new HashMap<>();   // class -> [prop, filler...]
         Map<String, List<String[]>> all = new HashMap<>();  // class -> [prop, filler...]
         Map<String, List<String[]>> unions = new HashMap<>(); // class -> union operands
+        // Cardinality records. minRec: [prop, n, filler] — at least n R-successors
+        // in filler ("*" = unqualified/Thing). maxRec: [prop, m, filler] — at
+        // most m R-successors in filler.
+        Map<String, List<String[]>> minRec = new HashMap<>();
+        Map<String, List<String[]>> maxRec = new HashMap<>();
         Map<String, List<String[]>> hv = new HashMap<>();     // class -> [dataProp, datatype, lexical]
         Map<String, Set<String>> dmax1 = new HashMap<>();     // class -> dataProps with card <= 1
         for (OWLAxiom ax : ont.getAxioms()) {
@@ -153,16 +158,70 @@ public class CompileOntology {
                 if (e instanceof OWLObjectSomeValuesFrom sv
                         && !sv.getProperty().isAnonymous()
                         && !sv.getFiller().isAnonymous()) {
-                    ex.computeIfAbsent(named.getIRI().toString(), x -> new ArrayList<>())
-                      .add(new String[]{sv.getProperty().getNamedProperty().getIRI().toString(),
-                                        sv.getFiller().asOWLClass().getIRI().toString()});
+                    String cn = named.getIRI().toString();
+                    String pr = sv.getProperty().getNamedProperty().getIRI().toString();
+                    String fl = sv.getFiller().asOWLClass().getIRI().toString();
+                    ex.computeIfAbsent(cn, x -> new ArrayList<>()).add(new String[]{pr, fl});
+                    minRec.computeIfAbsent(cn, x -> new ArrayList<>())
+                          .add(new String[]{pr, "1", fl});
                 } else if (e instanceof OWLObjectMinCardinality mc
                         && mc.getCardinality() >= 1
-                        && !mc.getProperty().isAnonymous()
-                        && !mc.getFiller().isAnonymous()) {
-                    ex.computeIfAbsent(named.getIRI().toString(), x -> new ArrayList<>())
-                      .add(new String[]{mc.getProperty().getNamedProperty().getIRI().toString(),
-                                        mc.getFiller().asOWLClass().getIRI().toString()});
+                        && !mc.getProperty().isAnonymous()) {
+                    String cn = named.getIRI().toString();
+                    String pr = mc.getProperty().getNamedProperty().getIRI().toString();
+                    String fl = mc.getFiller().isAnonymous() ? "*"
+                        : mc.getFiller().asOWLClass().getIRI().toString();
+                    if (!mc.getFiller().isAnonymous())
+                        ex.computeIfAbsent(cn, x -> new ArrayList<>()).add(new String[]{pr, fl});
+                    if (fl.equals("*") || !mc.getFiller().isAnonymous())
+                        minRec.computeIfAbsent(cn, x -> new ArrayList<>())
+                              .add(new String[]{pr, String.valueOf(mc.getCardinality()), fl});
+                } else if (e instanceof OWLObjectExactCardinality ec
+                        && !ec.getProperty().isAnonymous()
+                        && (ec.getFiller().isAnonymous() ? ec.getFiller().isOWLThing() || true : true)) {
+                    // Exact n = (min n) ⊓ (max n). Record both sides when the
+                    // filler is named or unqualified; skip complex fillers.
+                    if (ec.getFiller().isAnonymous() && !ec.getFiller().isOWLThing()) {
+                        // complex filler — outside the envelope
+                    } else {
+                        String cn = named.getIRI().toString();
+                        String pr = ec.getProperty().getNamedProperty().getIRI().toString();
+                        String fl = ec.getFiller().isOWLThing() ? "*"
+                            : ec.getFiller().asOWLClass().getIRI().toString();
+                        String n = String.valueOf(ec.getCardinality());
+                        if (ec.getCardinality() >= 1) {
+                            minRec.computeIfAbsent(cn, x -> new ArrayList<>())
+                                  .add(new String[]{pr, n, fl});
+                            if (!fl.equals("*"))
+                                ex.computeIfAbsent(cn, x -> new ArrayList<>())
+                                  .add(new String[]{pr, fl});
+                        }
+                        maxRec.computeIfAbsent(cn, x -> new ArrayList<>())
+                              .add(new String[]{pr, n, fl});
+                    }
+                } else if (e instanceof OWLObjectMaxCardinality xc
+                        && !xc.getProperty().isAnonymous()
+                        && (!xc.getFiller().isAnonymous() || xc.getFiller().isOWLThing())) {
+                    String cn = named.getIRI().toString();
+                    String pr = xc.getProperty().getNamedProperty().getIRI().toString();
+                    String fl = xc.getFiller().isOWLThing() ? "*"
+                        : xc.getFiller().asOWLClass().getIRI().toString();
+                    maxRec.computeIfAbsent(cn, x -> new ArrayList<>())
+                          .add(new String[]{pr, String.valueOf(xc.getCardinality()), fl});
+                } else if (e instanceof OWLDataExactCardinality dxc
+                        && dxc.getCardinality() == 1
+                        && dxc.getProperty() instanceof OWLDataProperty dxp
+                        && dxc.getFiller() instanceof OWLDataOneOf oneOf
+                        && oneOf.getValues().size() == 1) {
+                    // ExactCardinality(1, p, DataOneOf(v)) pins exactly one
+                    // p-value equal to v — a hasValue in cardinality syntax.
+                    OWLLiteral lit = oneOf.getValues().iterator().next();
+                    hv.computeIfAbsent(named.getIRI().toString(), x -> new ArrayList<>())
+                      .add(new String[]{dxp.getIRI().toString(),
+                                        lit.getDatatype().getIRI().toString(),
+                                        lit.getLiteral()});
+                    dmax1.computeIfAbsent(named.getIRI().toString(), x -> new HashSet<>())
+                         .add(dxp.getIRI().toString());
                 } else if (e instanceof OWLObjectUnionOf uo2) {
                     // B ⊑ (D1 ⊔ … ⊔ Dn). Only usable when EVERY operand is
                     // named: deriving from a subset of the operands would
@@ -223,6 +282,8 @@ public class CompileOntology {
         Map<String, List<String[]>> unionInh = new HashMap<>();
         Map<String, List<String[]>> hvInh = new HashMap<>();
         Map<String, Set<String>> dmax1Inh = new HashMap<>();
+        Map<String, List<String[]>> minInh = new HashMap<>();
+        Map<String, List<String[]>> maxInh = new HashMap<>();
         for (String c : anc.keySet()) {
             for (String a : anc.get(c)) {
                 if (ex.containsKey(a))
@@ -235,6 +296,10 @@ public class CompileOntology {
                     hvInh.computeIfAbsent(c, x -> new ArrayList<>()).addAll(hv.get(a));
                 if (dmax1.containsKey(a))
                     dmax1Inh.computeIfAbsent(c, x -> new HashSet<>()).addAll(dmax1.get(a));
+                if (minRec.containsKey(a))
+                    minInh.computeIfAbsent(c, x -> new ArrayList<>()).addAll(minRec.get(a));
+                if (maxRec.containsKey(a))
+                    maxInh.computeIfAbsent(c, x -> new ArrayList<>()).addAll(maxRec.get(a));
             }
         }
 
@@ -304,6 +369,35 @@ public class CompileOntology {
             }
         }
 
+        // R4: counting clash. A ⊑ ≤m R.C, B ⊑ ≥n R.D with n > m and D ⊑* C
+        // (or C unqualified): the A⊓B individual would need at least n
+        // R-successors inside a region capped at m. Functional object
+        // properties act as an unqualified ≤1.
+        List<String> maxClasses = new ArrayList<>(maxInh.keySet());
+        List<String> minClasses = new ArrayList<>(minInh.keySet());
+        for (String a : maxClasses) {
+            for (String[] mx : maxInh.get(a)) {
+                int m2 = Integer.parseInt(mx[1]);
+                for (String b : minClasses) {
+                    if (a.equals(b) || disjStar.test(a, b)) continue;
+                    for (String[] mn : minInh.get(b)) {
+                        if (!mn[0].equals(mx[0])) continue;
+                        int n2 = Integer.parseInt(mn[1]);
+                        if (n2 <= m2) continue;
+                        boolean fillerOk = mx[2].equals("*")
+                            || (!mn[2].equals("*")
+                                && anc.getOrDefault(mn[2], java.util.Collections.singleton(mn[2]))
+                                      .contains(mx[2]));
+                        if (fillerOk) {
+                            disjSet.add(a + "|" + b); disjSet.add(b + "|" + a);
+                            derived.add("[" + q(a) + "," + q(b) + "]");
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
         int rounds = 0;
         boolean changed = true;
         while (changed && rounds++ < 20) {
@@ -334,6 +428,39 @@ public class CompileOntology {
                         for (String[] ry : exInh.get(b)) {
                             if (!ry[0].equals(prop)) continue;
                             if (disjStar.test(c, ry[1])) {
+                                disjSet.add(a + "|" + b); disjSet.add(b + "|" + a);
+                                derived.add("[" + q(a) + "," + q(b) + "]");
+                                changed = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            // R5: A ⊑ ∀R.(C…), B ⊑ ∀R.(D…) with every Ci disjoint from every
+            // Dj, and A or B (via ancestors) forces at least one R-successor.
+            // That successor would have to be in both fillers, which are
+            // incompatible. Without the ≥1, an individual with no R-successors
+            // satisfies both universals, so no derivation.
+            for (String a : allInh.keySet()) {
+                for (String[] ra : allInh.get(a)) {
+                    for (String b : allInh.keySet()) {
+                        if (a.equals(b) || disjStar.test(a, b)) continue;
+                        boolean forced = false;
+                        for (String[] mn : minInh.getOrDefault(a, java.util.Collections.emptyList()))
+                            if (mn[0].equals(ra[0])) { forced = true; break; }
+                        if (!forced)
+                            for (String[] mn : minInh.getOrDefault(b, java.util.Collections.emptyList()))
+                                if (mn[0].equals(ra[0])) { forced = true; break; }
+                        if (!forced) continue;
+                        for (String[] rb : allInh.get(b)) {
+                            if (!rb[0].equals(ra[0])) continue;
+                            boolean allDisj = true;
+                            outer5:
+                            for (int i = 1; i < ra.length; i++)
+                                for (int j = 1; j < rb.length; j++)
+                                    if (!disjStar.test(ra[i], rb[j])) { allDisj = false; break outer5; }
+                            if (allDisj) {
                                 disjSet.add(a + "|" + b); disjSet.add(b + "|" + a);
                                 derived.add("[" + q(a) + "," + q(b) + "]");
                                 changed = true;
