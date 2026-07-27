@@ -188,7 +188,7 @@ impl Index {
         // Intern every class mentioned anywhere.
         let mut ids: HashMap<String, u32> = HashMap::new();
         let mut names: Vec<String> = Vec::new();
-        let mut intern = |s: &str, ids: &mut HashMap<String, u32>, names: &mut Vec<String>| {
+        let intern = |s: &str, ids: &mut HashMap<String, u32>, names: &mut Vec<String>| {
             if let Some(&i) = ids.get(s) {
                 return i;
             }
