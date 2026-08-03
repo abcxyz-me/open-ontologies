@@ -62,17 +62,35 @@ Given the Manchester Pizza OWL and a 13-row restaurant CSV, map the data into th
 | Total RDF Triples | 0 | 0 | **2,540** |
 | SPARQL Queryable | No | No | **Yes** |
 
-## OntoAxiom Benchmark — Three Approaches
+## OntoAxiom Benchmark — Tool Access vs Raw File vs Name Lists
 
 [OntoAxiom](https://arxiv.org/abs/2512.05594) tests LLM axiom identification across 9 ontologies and 3,042 ground truth axioms.
 
-| Approach | F1 | vs o1 |
-| -------- | -- | ----- |
-| o1 (paper's best) | 0.197 | — |
-| **Bare Claude Opus** | **0.431** | **+119%** |
-| **MCP extraction** | **0.717** | **+264%** |
+All conditions below are scored by **one** evaluator (`score_all_conditions.py`): shared normalizer, `domain`/`range`-only pair flipping, empty ground-truth cells skipped, both averages reported. Numbers are rescored from stored predictions, with no new inference.
 
-Full writeup: [`benchmark/ontoaxiom/ONTOAXIOM_SHOWDOWN.md`](../benchmark/ontoaxiom/ONTOAXIOM_SHOWDOWN.md)
+| Model | Condition | Input | macro F1 | micro F1 |
+| ----- | --------- | ----- | -------: | -------: |
+| Claude Opus | A | Name lists only | 0.451 | 0.397 |
+| Claude Opus | **D** | **Full raw OWL** | **0.768** | **0.686** |
+| Qwen3-Coder-30B | A | Name lists only | 0.223 | 0.176 |
+| Qwen3-Coder-30B | **D** | **Full raw OWL** | **0.673** | **0.667** |
+| MCP + SPARQL extraction | C | Full OWL | 0.713 | 0.717 |
+
+Two things follow, and neither is the flattering reading.
+
+**Raw OWL helps.** The OntoAxiom paper's counterintuitive result, that an LLM given the full OWL file (0.323) scores below the same LLM given only name lists (0.431), does not survive a single shared scorer. Those two figures were produced by scripts that disagreed on three axes (camelCase normalisation, macro vs micro averaging, and which axiom types get pair-flipped), every one of which penalised the raw-OWL condition. Rescoring reverses the sign on **both** models under **both** averages. `score_condition_d.py --legacy` reproduces the 0.323 exactly, so the bug is demonstrated rather than asserted.
+
+**Tools buy auditability, not accuracy.** Scored correctly, MCP extraction and raw-file reading are at parity: raw OWL wins macro (0.768 vs 0.713), extraction wins micro (0.717 vs 0.686). The remaining case for the tool layer is that every MCP pair traces to a SPARQL query against real triples, whereas a model reading a file can hallucinate a plausible pair and no F1 score will identify which one.
+
+The OntoAxiom paper reports o1 at F1 = 0.197 as its best system. That figure is **not** used as a comparison baseline here, because the paper does not state which average it is, and mixing statistics is precisely the error being corrected above.
+
+Results are **single-run** at temperature 0.2, not averaged over seeds. Several benchmark ontologies (Pizza, FOAF, OWL-Time) are widely published and likely present in pretraining data, so bare-LLM scores are contamination-inclusive baselines; the cross-model Qwen ablation exists to test whether an effect is a property of the tooling or of one vendor's model.
+
+Full writeup, including the three-bug analysis and reproduction commands: [`benchmark/ontoaxiom/ONTOAXIOM_SHOWDOWN.md`](../benchmark/ontoaxiom/ONTOAXIOM_SHOWDOWN.md)
+
+## OAEI Ontology Alignment
+
+Anatomy 0.832 F1 (9th of 13 in the OAEI 2025 field), Conference 0.438 (below every participating system and both baselines). Full field, both baselines, and the stable-matching ablation: [`benchmark/oaei/README.md`](../benchmark/oaei/README.md)
 
 ## Claim Verification — Compiled Reasoning vs HermiT
 

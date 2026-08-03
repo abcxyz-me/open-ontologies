@@ -698,7 +698,7 @@ impl OpenOntologiesServer {
 
     // ── Marketplace ────────────────────────────────────────────────────────
 
-    #[tool(name = "onto_marketplace", description = "Browse and install standard ontologies from a curated catalogue of 32 W3C/ISO/industry standards. Actions: 'list' (browse catalogue, optional domain filter) or 'install' (fetch and load by ID)")]
+    #[tool(name = "onto_marketplace", description = "Browse and install standard ontologies from a curated catalogue of 33 W3C/ISO/industry standards. Actions: 'list' (browse catalogue, optional domain filter) or 'install' (fetch and load by ID)")]
     async fn onto_marketplace(&self, Parameters(input): Parameters<OntoMarketplaceInput>) -> String {
         use crate::marketplace;
         match input.action.as_str() {

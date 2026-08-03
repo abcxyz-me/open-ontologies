@@ -166,7 +166,11 @@ def main():
                                    'micro_f1': round(micro, 4), 'macro_f1': round(macro, 4),
                                    'legacy_scoring': bool(args.legacy)}
 
-    out = os.path.join(EX_DIR, 'condition_d_scores.json')
+    # --legacy writes to its own file. It used to share the canonical path, so a
+    # single reproduction run silently replaced the corrected scores on disk with
+    # the broken ones the corrected scores exist to refute.
+    name = 'condition_d_scores_legacy.json' if args.legacy else 'condition_d_scores.json'
+    out = os.path.join(EX_DIR, name)
     with open(out, 'w') as f:
         json.dump(all_results, f, indent=2)
     print(f'\nSaved to {out}')

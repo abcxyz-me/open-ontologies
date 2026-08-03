@@ -31,7 +31,7 @@
 
 ---
 
-Open Ontologies is a **Rust MCP server** and **desktop Studio** for AI-native ontology engineering. It exposes **70+ tools** that let Claude build, validate, query, diff, lint, version, reason over, align, plan, certify, and govern RDF/OWL ontologies using an in-memory Oxigraph triple store — with a full three-layer Dynamics → Causal → Planner architecture, a marketplace of 32 standard ontologies, clinical crosswalks, semantic embeddings, and a full lineage audit trail.
+Open Ontologies is a **Rust MCP server** and **desktop Studio** for AI-native ontology engineering. It exposes **70+ tools** that let Claude build, validate, query, diff, lint, version, reason over, align, plan, certify, and govern RDF/OWL ontologies using an in-memory Oxigraph triple store — with a full three-layer Dynamics → Causal → Planner architecture, a marketplace of 33 standard ontologies, clinical crosswalks, semantic embeddings, and a full lineage audit trail.
 
 The **Studio** wraps the engine in a visual desktop environment: virtualized ontology tree with hierarchy lines, breadcrumb navigation, and connection explorer; AI chat panel with `/build` (IES-level deep) and `/sketch` (quick prototype) commands; Protégé-style property inspector; and lineage viewer.
 
@@ -273,6 +273,20 @@ The first launch compiles the Tauri shell (~2 min). Subsequent launches start in
 
 ---
 
+## Research Questions
+
+The benchmarks below are not a feature tour. Each one exists to answer a specific question, and the answers include the unflattering ones.
+
+| # | Question | Where it is measured | Answer as measured |
+| --- | --- | --- | --- |
+| **RQ1** | Does structured tool access give an LLM a materially different mode of access to an ontology than handing it the raw OWL file, or than giving it nothing but class and property names? | [OntoAxiom](#ontoaxiom--llm-axiom-identification), 3 conditions, 2 models | **Partly.** Both beat name lists decisively. Tool extraction and raw-file reading are at **parity** with each other: raw OWL wins the macro average, extraction wins the micro. The tools' remaining advantage is that every pair traces to a query against real triples. |
+| **RQ2** | When two evaluation conditions disagree, how much of the gap is the method and how much is the scorer? | [OntoAxiom](#ontoaxiom--llm-axiom-identification), legacy vs unified evaluator | **Enough to invert the finding.** Three scorer asymmetries, all pointing one way, produced a reported result whose sign reverses under a shared evaluator, on both models and under both averages. |
+| **RQ3** | In ontology alignment, which carries the result: how the similarity signals are weighted, or the constraint that the matching be 1-to-1? | [OAEI Anatomy](#oaei-ontology-alignment--anatomy-track), 5 weight configurations vs stable-matching ablation | **The constraint, overwhelmingly.** F1 moves 0.0033 across five weight configurations and collapses from 0.832 to 0.182 when stable matching is removed. |
+| **RQ4** | How far does an alignment system get on a biomedical track with **no** domain background knowledge (no UMLS, no BioPortal, no LLM oracle)? | [OAEI Anatomy](#oaei-ontology-alignment--anatomy-track) and [Conference](#oaei-ontology-alignment--conference-track), full 2025 field | **Not far enough.** 9th of 13 on Anatomy, level with the lightweight lexical matcher and +0.066 F1 over a string-equality baseline. Below every system and both baselines on Conference. Precision is competitive; recall is the failure. |
+| **RQ5** | Does a closed-world vocabulary check catch generated terms that open-world SHACL validation silently accepts? | [`onto-correctness-bench`](case-studies/onto-correctness-bench/): 3 vocabularies, 418 fabricated terms, 300 graphs | **Yes, completely.** SHACL returned `conforms=true` on **300/300** graphs containing a fabricated term. The closed-world gate flagged **300/300**, with zero false positives on clean graphs. Open-world semantics treat an undeclared predicate as merely unknown, so SHACL is structurally unable to see it. |
+
+RQ2 and RQ4 are the ones worth reading if you are deciding whether to trust this repo. Both are negative results about work done here.
+
 ## Benchmarks
 
 > **How to read these numbers.** Unless stated, LLM results are **single-run** (not averaged over seeds) and use **Claude Opus 4.8**. Several benchmark ontologies (Pizza, FOAF, Schema.org, OWL-Time) are widely published and may appear in an LLM's pretraining data, so a *bare-LLM* score is a **contamination-inclusive baseline**, not a clean measure of reasoning — the contribution is the **delta** the MCP tools add on top of that baseline, and whether that delta reproduces across models. To check exactly that, the repo ships a **cross-model ablation** driving the same tasks with a local **Qwen3-Coder-30B** as well as Claude — see [`benchmark/ontoaxiom/`](benchmark/ontoaxiom/). If the tool-augmented gain holds on a second, open model, the gain is a property of the tooling, not of one vendor's model.
@@ -340,44 +354,46 @@ The Studio provides two build commands for different use cases. Both take the sa
 | False negatives | **0** |
 | Classification rules | 6 OWL axioms |
 
-### Ontology Marketplace — 32 Standard Ontologies
+### Ontology Marketplace — 33 Standard Ontologies
 
-All 32 marketplace ontologies fetched, `owl:imports` resolved, loaded, and reasoned over with both RDFS and OWL-RL profiles:
+The 29 general-purpose marketplace ontologies (the four IES entries are covered separately under [IES Support](#ies-support)) fetched, `owl:imports` resolved, loaded, and reasoned over with both RDFS and OWL-RL profiles. Regenerate with `python3 benchmark/marketplace_benchmark.py`:
 
 | Ontology | Classes | Properties | Triples | + RDFS | + OWL-RL | Fetch | RDFS | OWL-RL |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| OWL 2 | 32 | 4 | 537 | +230 | +230 | 681ms | 6ms | 3ms |
-| RDF Schema | 6 | 0 | 87 | +35 | +35 | 522ms | 2ms | 1ms |
-| RDF Concepts | 7 | 0 | 127 | +31 | +31 | 545ms | 2ms | 2ms |
-| BFO (ISO 21838) | 35 | 0 | 1,221 | +186 | +186 | 1,141ms | 5ms | 4ms |
-| DOLCE/DUL | 93 | 118 | 1,917 | +666 | +692 | 2,208ms | 13ms | 12ms |
-| Schema.org | 1,009 | 0 | 17,823 | +4,031 | **+13,670** | 558ms | 57ms | 117ms |
-| FOAF | 28 | 60 | 631 | +4 | +31 | 940ms | 3ms | 2ms |
-| SKOS | 5 | 18 | 252 | +55 | +55 | 218ms | 2ms | 1ms |
-| Dublin Core Elements | 0 | 0 | 107 | +0 | +0 | 371ms | 2ms | 1ms |
-| Dublin Core Terms | 22 | 0 | 700 | +256 | +261 | 259ms | 4ms | 3ms |
-| DCAT | 58 | 89 | 2,841 | +223 | +254 | 975ms | 15ms | 11ms |
-| VoID | 8 | 8 | 216 | +0 | +0 | 531ms | 2ms | 2ms |
-| DOAP | 17 | 0 | 741 | +0 | +0 | 727ms | 2ms | 2ms |
-| PROV-O | 39 | 50 | 1,146 | +202 | +203 | 472ms | 5ms | 4ms |
-| OWL-Time | 23 | 58 | 1,296 | +165 | +165 | 256ms | 5ms | 4ms |
-| W3C Organization | 22 | 33 | 748 | +9 | +21 | 639ms | 4ms | 3ms |
-| SSN | 35 | 38 | 1,815 | +84 | +84 | 519ms | 6ms | 4ms |
-| SOSA | 29 | 23 | 396 | +0 | +0 | 1,264ms | 3ms | 2ms |
-| GeoSPARQL | 12 | 54 | 796 | +4 | +12 | 733ms | 3ms | 3ms |
-| LOCN | 2 | 0 | 206 | +0 | +0 | 1,031ms | 2ms | 1ms |
-| SHACL | 40 | 0 | 1,128 | +268 | +268 | 662ms | 5ms | 3ms |
-| vCard | 75 | 84 | 882 | +0 | +46 | 854ms | 3ms | 3ms |
-| ODRL | 71 | 50 | 2,157 | +73 | +76 | 798ms | 6ms | 5ms |
-| Creative Commons | 6 | 0 | 115 | +0 | +49 | 184ms | 1ms | 1ms |
-| SIOC | 14 | 83 | 615 | +0 | +2 | 863ms | 3ms | 2ms |
-| ADMS | 4 | 13 | 151 | +0 | +0 | 747ms | 3ms | 1ms |
-| GoodRelations | 98 | 102 | 1,834 | +15 | +42 | 2,299ms | 6ms | 6ms |
-| FIBO (metadata) | 0 | 0 | 45 | +0 | +0 | 1,524ms | 3ms | 1ms |
-| QUDT | 73 | 175 | 2,434 | +1,574 | +1,581 | 2,934ms | 14ms | 9ms |
-| **Total** | **1,863** | **1,060** | **42,964** | **+8,111** | **+17,994** | — | — | — |
+| OWL 2 | 29 | 0 | 537 | +230 | +230 | 276ms | 1ms | 1ms |
+| RDF Schema | 4 | 0 | 87 | +35 | +35 | 268ms | 0ms | 0ms |
+| RDF Concepts | 13 | 0 | 127 | +31 | +31 | 175ms | 0ms | 0ms |
+| BFO (ISO 21838) | 35 | 2 | 1,221 | +186 | +186 | 254ms | 2ms | 1ms |
+| DOLCE/DUL | 79 | 118 | 1,917 | +666 | +692 | 181ms | 7ms | 8ms |
+| Schema.org | 1,032 | 1,674 | 17,949 | +4,082 | **+14,236** | 679ms | 56ms | 136ms |
+| FOAF | 15 | 62 | 631 | +4 | +31 | 656ms | 1ms | 1ms |
+| SKOS | 5 | 28 | 252 | +55 | +55 | 81ms | 1ms | 1ms |
+| Dublin Core Elements | 0 | 15 | 107 | +0 | +0 | 315ms | 1ms | 0ms |
+| Dublin Core Terms | 23 | 70 | 700 | +256 | +261 | 129ms | 2ms | 2ms |
+| DCAT | 49 | 110 | 2,841 | +223 | +254 | 356ms | 7ms | 8ms |
+| VoID | 7 | 27 | 216 | +0 | +0 | 333ms | 0ms | 0ms |
+| DOAP | 22 | 45 | 741 | +0 | +0 | 352ms | 1ms | 1ms |
+| PROV-O | 31 | 59 | 1,146 | +202 | +203 | 204ms | 3ms | 2ms |
+| OWL-Time | 29 | 58 | 1,296 | +165 | +165 | 206ms | 3ms | 2ms |
+| W3C Organization | 17 | 38 | 748 | +9 | +21 | 259ms | 2ms | 2ms |
+| SSN | 23 | 38 | 1,815 | +84 | +84 | 262ms | 2ms | 2ms |
+| SOSA | 17 | 23 | 396 | +0 | +0 | 323ms | 1ms | 1ms |
+| GeoSPARQL | 15 | 54 | 796 | +4 | +12 | 227ms | 1ms | 1ms |
+| LOCN | 3 | 15 | 206 | +0 | +0 | 363ms | 1ms | 1ms |
+| SHACL | 48 | 101 | 1,128 | +268 | +268 | 277ms | 2ms | 2ms |
+| vCard | 64 | 84 | 882 | +0 | +46 | 316ms | 1ms | 1ms |
+| ODRL | 31 | 58 | 2,157 | +73 | +76 | 212ms | 3ms | 3ms |
+| Creative Commons | 21 | 13 | 115 | +0 | +49 | 564ms | 1ms | 1ms |
+| SIOC | 17 | 86 | 615 | +0 | +2 | 364ms | 1ms | 1ms |
+| ADMS | 8 | 16 | 151 | +0 | +0 | 377ms | 1ms | 1ms |
+| GoodRelations | 43 | 102 | 1,834 | +15 | +42 | 303ms | 3ms | 4ms |
+| FIBO (metadata) | 0 | 0 | 48 | +0 | +0 | 505ms | 4ms | 4ms |
+| QUDT | 99 | 196 | 2,434 | +1,574 | +1,581 | 2,100ms | 50ms | 49ms |
+| **Total** | **1,779** | **3,092** | **43,093** | **+8,162** | **+18,560** | — | — | — |
 
-32/32 ontologies loaded, imports resolved, and reasoned. RDFS adds 18% more triples. OWL-RL adds **41%** — transitive/symmetric/inverse properties and equivalentClass expansion discover significantly more implicit knowledge. Schema.org jumps from +4,031 (RDFS) to +13,670 (OWL-RL) inferred triples in 117ms.
+29/29 ontologies loaded, imports resolved, and reasoned. RDFS adds 18% more triples. OWL-RL adds **43%** — transitive/symmetric/inverse properties and equivalentClass expansion discover significantly more implicit knowledge. Schema.org jumps from +4,082 (RDFS) to +14,236 (OWL-RL) inferred triples in 136ms.
+
+Class and property counts are structural, not declaration-only: a term counts if it is typed (`owl:Class`, `rdfs:Class`, `owl:ObjectProperty`, `owl:DatatypeProperty`, `rdf:Property`) **or** used as one (`rdfs:subClassOf`/`subPropertyOf`/`domain`/`range` position). Vocabularies that never issue OWL type declarations, such as Schema.org, are therefore counted rather than reported as empty. Terms in the `rdf:`, `rdfs:` and `owl:` namespaces are excluded so a vocabulary is not credited with the meta-vocabulary it is written in. That exclusion is why OWL 2, RDF Schema and RDF Concepts report **0 properties**: every property they define is, by definition, in an excluded namespace. FIBO's marketplace entry is the metadata module only (48 triples), which declares no terms of its own.
 
 ### Compiled Claim Verification — measured vs HermiT
 
@@ -418,17 +434,57 @@ Full benchmark methodology: [docs/benchmarks.md](docs/benchmarks.md)
 
 ### OAEI Ontology Alignment — Anatomy Track
 
-[OAEI](https://oaei.ontologymatching.org/) is the standard benchmark for ontology alignment systems. The Anatomy track aligns 2,737 mouse anatomy classes to 3,304 human anatomy classes against 1,516 reference mappings.
+[OAEI](https://oaei.ontologymatching.org/) is the standard benchmark for ontology alignment systems. The Anatomy track aligns the mouse anatomy ontology (2,744 classes) to the human anatomy fragment of the NCI Thesaurus (3,304 classes) against 1,516 reference mappings.
+
+The comparison below is the **complete** OAEI 2025 Anatomy field, reproduced from Table 9 of the official results paper ([Vol-4144, om2025-oaei-paper0](https://ceur-ws.org/Vol-4144/om2025-oaei-paper0.pdf)), including both baselines. Open Ontologies is inserted at its measured rank. Nothing is filtered.
 
 | System | Precision | Recall | F1 |
-| --- | --- | --- | --- |
-| AML | 0.950 | 0.922 | **0.936** |
-| BERTMap | 0.940 | 0.910 | **0.924** |
-| LogMap | 0.930 | 0.890 | **0.912** |
-| OLaLa | 0.900 | 0.880 | **0.890** |
+| --- | ---: | ---: | ---: |
+| Matcha | 0.951 | 0.931 | **0.941** |
+| Agent-OM | 0.959 | 0.883 | **0.920** |
+| ALIN | 0.942 | 0.884 | **0.912** |
+| LogMapLLM | 0.964 | 0.842 | **0.899** |
+| LogMap-Bio | 0.885 | 0.911 | **0.898** |
+| MDMapper | 0.899 | 0.879 | **0.889** |
+| LogMap | 0.917 | 0.848 | **0.881** |
+| LogMapKG | 0.917 | 0.848 | **0.881** |
 | **Open Ontologies** | **0.963** | **0.733** | **0.832** |
+| DRAL-OA | 0.830 | 0.827 | **0.828** |
+| LogMapLt | 0.962 | 0.728 | **0.828** |
+| *StringEquiv (baseline)* | 0.997 | 0.622 | **0.766** |
+| LSMatch | 0.952 | 0.634 | **0.761** |
 
-Open Ontologies uses 7 weighted signals (label similarity, property/parent/instance/restriction/neighbourhood overlap, embedding similarity), stable 1-to-1 matching, and a label penalty when no structural evidence is available. No external background knowledge (UMLS, BioPortal) is used. See issues [#8](https://github.com/fabio-rovai/open-ontologies/issues/8), [#9](https://github.com/fabio-rovai/open-ontologies/issues/9), [#10](https://github.com/fabio-rovai/open-ontologies/issues/10) for planned improvements.
+**Read this honestly.** Open Ontologies ranks **9th of 13** on F1. Its precision (0.963) is third in the field, but its recall (0.733) is second-from-bottom among non-baseline systems, and the resulting F1 sits **level with LogMapLt**, the deliberately lightweight lexical matcher, and 0.109 below the leader. The `StringEquiv` baseline reaches 0.766 by normalised string equality alone, so the margin this system earns over pure string matching is **+0.066 F1**. That is the number to beat, and it is not yet a competitive result.
+
+The gap is recall, and its cause is identifiable: this system carries **no domain background knowledge**. Anatomy is a track where UMLS and BioPortal lookups are what separate the 0.88+ band from the rest, and every system above Open Ontologies in the table either uses biomedical background knowledge, an LLM oracle, or both. Alignment here uses 7 weighted signals (label similarity, property/parent/instance/restriction/neighbourhood overlap, embedding similarity), stable 1-to-1 matching, and a label penalty when no structural evidence is available.
+
+The defensible finding from this track is therefore **not** the headline F1. It is the ablation: stable 1-to-1 matching is what makes the difference, and the signal weights are nearly irrelevant once it is applied.
+
+| Configuration | Precision | Recall | F1 |
+| --- | ---: | ---: | ---: |
+| With stable matching (5 weight configurations) | 0.963 | 0.733 | 0.832 ± 0.004 |
+| Without stable matching | 0.102 | 0.846 | 0.182 |
+
+Removing stable matching produces 12,557 candidates against a 1,516-mapping reference. See issues [#8](https://github.com/fabio-rovai/open-ontologies/issues/8), [#9](https://github.com/fabio-rovai/open-ontologies/issues/9), [#10](https://github.com/fabio-rovai/open-ontologies/issues/10); background-knowledge integration is the open work.
+
+### OAEI Ontology Alignment — Conference Track
+
+15 of the 21 conference-track pairs, micro-averaged:
+
+| System | Precision | Recall | F1 |
+| --- | ---: | ---: | ---: |
+| ALIN | 0.62 | 0.68 | **0.65** |
+| LogMap | 0.76 | 0.56 | **0.64** |
+| Matcha | 0.77 | 0.53 | **0.63** |
+| Agent-OM | 0.64 | 0.59 | **0.61** |
+| MDMapper | 0.69 | 0.50 | **0.58** |
+| *edna (baseline)* | 0.74 | 0.45 | **0.56** |
+| LogMapLt | 0.68 | 0.47 | **0.56** |
+| LSMatch | 0.83 | 0.41 | **0.55** |
+| *StringEquiv (baseline)* | 0.76 | 0.41 | **0.53** |
+| **Open Ontologies** | **0.693** | **0.320** | **0.438** |
+
+**Not comparable like-for-like, and worse than it looks.** The OAEI rows are Table 10 of the 2025 results paper, evaluated over all 21 pairs against the `rar2` reference at each system's F1-optimal threshold. The Open Ontologies row covers 15 pairs at a fixed confidence threshold. With that caveat stated, the result is unambiguous: **below every participating system and below both baselines**. Best pairs are `ekaw-iasted` (0.588) and `ekaw-sigkdd` (0.533); worst is `edas-sigkdd` (0.211). Conference is a track where the same recall failure that costs Anatomy its rank costs more, because there is no lexical redundancy to fall back on.
 
 ---
 
@@ -721,7 +777,7 @@ The same tool, applied to any ontology, produces the same kind of improvement. T
 | **Core** | `validate` `load` `save` `clear` `stats` `query` `diff` `lint` `convert` `status` | RDF/OWL validation, querying, and management |
 | **Repository** | `repo_list` `repo_load` | Browse and load ontologies from configured `[general] ontology_dirs` directories |
 | **Cache** | `cache_status` `cache_list` `cache_remove` `unload` `recompile` | On-disk N-Triples compile cache, idle-TTL eviction, per-name management ([details](docs/cache-and-registry.md)) |
-| **Marketplace** | `marketplace` | Browse and install 32 standard W3C/ISO/industry ontologies |
+| **Marketplace** | `marketplace` | Browse and install 33 standard W3C/ISO/industry ontologies |
 | **Remote** | `pull` `push` `import` | Fetch/push ontologies, resolve owl:imports |
 | **Schema** | `import-schema` `sql-ingest` | Postgres + DuckDB → OWL + SQL → RDF ingest |
 | **Data** | `map` `ingest` `shacl` `shacl_check` `vocab_check` `reason` `extend` | Structured data → RDF pipeline; `vocab_check` = closed-world check that generated data uses only ontology-declared terms (catches what open-world SHACL misses) |
