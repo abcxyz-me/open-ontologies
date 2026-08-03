@@ -1,5 +1,52 @@
 # Changelog
 
+## 1.1.1 — 2026-08-03
+
+Correctness and reporting. No new features. Two of these change output, so
+results produced with 1.1.0 or earlier are not directly comparable.
+
+### Fixed
+- **Tableaux classification was nondeterministic.** `named_classes` is a
+  `HashSet` and five expansion sites collected `self.nodes.keys()` unordered, so
+  hash iteration order decided which subsumption checks completed inside the
+  node and depth budgets. Exhaustion correctly yields `Unknown`, so entailments
+  were silently absent rather than wrong. Conformance suite went from 4/6 to
+  12/12 consecutive runs passing, and that binary's wall time from 1.17-2.57s to
+  0.01s. See `docs/determinism.md`.
+- **Alignment was nondeterministic.** `extract_classes` returned
+  `into_values()` order and the candidate comparator sorted on confidence alone,
+  which is not a total order because the zero-structural-signal branch assigns
+  many pairs the identical value. Five runs of the same binary produced five
+  different alignments. Now sorted by IRI with ties broken on the IRI pair.
+- **Security:** `tract` 0.21 -> 0.22.3 and `time` -> 0.3.55, closing
+  RUSTSEC-2026-0217 and RUSTSEC-2026-0009. The 0.21 line could not satisfy both
+  advisories simultaneously.
+- `run_ablation_no_stable.py` had been failing on a stale source marker and had
+  never run to completion.
+- `score_condition_d.py --legacy` wrote to the canonical results path,
+  overwriting the corrected scores with the ones they exist to refute.
+
+### Changed
+- **OAEI Anatomy result corrected to P 0.960 / R 0.730 / F1 0.829** (1,152
+  correspondences). The previously recorded 0.832 was one draw from the
+  nondeterministic distribution above. Rank in the OAEI 2025 field is unchanged
+  at 9th of 13.
+- Benchmark reporting now uses the complete OAEI 2025 field including both
+  baselines, rather than four selected systems.
+- Marketplace statistics regenerated; property counts were stale output from a
+  counting bug fixed in March.
+
+### Removed
+- **The 1,633x OWL-RL vs HermiT speed claim is withdrawn.** It was measured on
+  an empty store and inverts when measured correctly. See
+  `benchmark/reasoner/README.md`. No speed claim against a Java reasoner should
+  be made from this repository.
+
+### Added
+- `docs/determinism.md` recording both defects, with reproduction commands.
+- `benchmark/oaei/results/ablation_no_stable.json`, the single-variable
+  stable-matching ablation.
+
 ## 1.1.0 — 2026-07-27
 
 ### Added
