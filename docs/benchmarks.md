@@ -156,3 +156,16 @@ make bench-pizza    # Just Pizza
 make bench-ontoaxiom # Just OntoAxiom
 make bench-reasoner # Just reasoner comparison
 ```
+
+## Determinism and corrected results
+
+Two subsystems in this repository were nondeterministic: tableaux classification
+and alignment both let `HashMap` iteration order decide their output. Both are
+fixed, and the Anatomy figure recorded before the fix (F1 0.832) was one draw
+from a distribution whose deterministic value is 0.829. Full record, including
+the five divergent alignment hashes and the reproduction commands:
+[`docs/determinism.md`](determinism.md).
+
+A speed claim against HermiT previously carried here and in `arXiv:2605.09184v1`
+is **withdrawn**: it was measured on an empty store, and inverts when measured
+correctly. See [`benchmark/reasoner/README.md`](../benchmark/reasoner/README.md).

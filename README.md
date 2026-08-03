@@ -960,6 +960,7 @@ flowchart TD
 | IES SPARQL Examples | [docs/ies-examples.md](docs/ies-examples.md) |
 | IES:Building Alignment | [docs/ies-alignment.md](docs/ies-alignment.md) |
 | Benchmarks | [docs/benchmarks.md](docs/benchmarks.md) |
+| Determinism & corrected results | [docs/determinism.md](docs/determinism.md) |
 | Contributing | [CONTRIBUTING.md](CONTRIBUTING.md) |
 | Changelog | [CHANGELOG.md](CHANGELOG.md) |
 
