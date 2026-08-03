@@ -64,7 +64,7 @@ Given the Manchester Pizza OWL and a 13-row restaurant CSV, map the data into th
 
 ## OntoAxiom Benchmark — Tool Access vs Raw File vs Name Lists
 
-[OntoAxiom](https://arxiv.org/abs/2512.05594) tests LLM axiom identification across 9 ontologies and 3,042 ground truth axioms.
+[OntoAxiom](https://arxiv.org/abs/2512.05594) tests LLM axiom identification across five axiom types. The paper states 2,771 axioms; the released ground truth contains 3,042 ordered pairs over those types, or 2,514 if symmetric pairs are collapsed. We score the 3,042 and say so.
 
 All conditions below are scored by **one** evaluator (`score_all_conditions.py`): shared normalizer, `domain`/`range`-only pair flipping, empty ground-truth cells skipped, both averages reported. Numbers are rescored from stored predictions, with no new inference.
 
@@ -90,7 +90,7 @@ Full writeup, including the three-bug analysis and reproduction commands: [`benc
 
 ## OAEI Ontology Alignment
 
-Anatomy 0.832 F1 (9th of 13 in the OAEI 2025 field), Conference 0.438 (below every participating system and both baselines). Full field, both baselines, and the stable-matching ablation: [`benchmark/oaei/README.md`](../benchmark/oaei/README.md)
+Anatomy 0.829 F1 (9th of 13 in the OAEI 2025 field), Conference 0.438 (below every participating system and both baselines). Full field, both baselines, and the stable-matching ablation: [`benchmark/oaei/README.md`](../benchmark/oaei/README.md)
 
 ## Claim Verification — Compiled Reasoning vs HermiT
 

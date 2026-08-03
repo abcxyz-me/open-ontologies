@@ -10,24 +10,27 @@
     ],
     "date": "2026-04-21",
     "notes": "v2: stable matching + label penalty (fixes #8). Previous results (v1, 2026-03-31) in oaei_results_v1.json",
-    "comparators": "OAEI 2025 (CEUR Vol-4144, om2025-oaei-paper0)"
+    "comparators": "OAEI 2025 (CEUR Vol-4144, om2025-oaei-paper0)",
+    "deterministic_since": "align.rs: sort extract_classes by IRI; total-order candidate sort"
   },
   "anatomy": {
-    "precision": 0.963,
-    "recall": 0.733,
-    "f1": 0.832,
-    "tp": 1112,
-    "fp": 42,
-    "fn": 404,
+    "precision": 0.9601,
+    "recall": 0.7296,
+    "f1": 0.8291,
+    "tp": 1106,
+    "fp": 46,
+    "fn": 410,
     "reference_size": 1516,
-    "predicted_size": 1154,
+    "predicted_size": 1152,
     "time_s": 47,
     "min_confidence": 0.8,
     "changes": [
       "stable 1-to-1 matching (keep top candidate per source and target class)",
       "label penalty (label_sim * 0.85) when structural signals are zero",
       "label pre-filter raised from 0.70 to 0.75"
-    ]
+    ],
+    "deterministic": true,
+    "notes": "Deterministic as of the align.rs ordering fix. Before it, extract_classes returned classes in HashMap iteration order and the confidence sort was not a total order, so the greedy 1-to-1 selection varied per process: five runs of the same binary gave 1151/1153/1151/1152/1154 candidates and five distinct alignments. The previously recorded P=0.963 R=0.733 F1=0.832 was one draw from that distribution."
   },
   "anatomy_v1": {
     "precision": 0.1021,

@@ -281,8 +281,8 @@ The benchmarks below are not a feature tour. Each one exists to answer a specifi
 | --- | --- | --- | --- |
 | **RQ1** | Does structured tool access give an LLM a materially different mode of access to an ontology than handing it the raw OWL file, or than giving it nothing but class and property names? | [OntoAxiom](#ontoaxiom--llm-axiom-identification), 3 conditions, 2 models | **Partly.** Both beat name lists decisively. Tool extraction and raw-file reading are at **parity** with each other: raw OWL wins the macro average, extraction wins the micro. The tools' remaining advantage is that every pair traces to a query against real triples. |
 | **RQ2** | When two evaluation conditions disagree, how much of the gap is the method and how much is the scorer? | [OntoAxiom](#ontoaxiom--llm-axiom-identification), legacy vs unified evaluator | **Enough to invert the finding.** Three scorer asymmetries, all pointing one way, produced a reported result whose sign reverses under a shared evaluator, on both models and under both averages. |
-| **RQ3** | In ontology alignment, which carries the result: how the similarity signals are weighted, or the constraint that the matching be 1-to-1? | [OAEI Anatomy](#oaei-ontology-alignment--anatomy-track), 5 weight configurations vs stable-matching ablation | **The constraint, overwhelmingly.** F1 moves 0.0033 across five weight configurations and collapses from 0.832 to 0.182 when stable matching is removed. |
-| **RQ4** | How far does an alignment system get on a biomedical track with **no** domain background knowledge (no UMLS, no BioPortal, no LLM oracle)? | [OAEI Anatomy](#oaei-ontology-alignment--anatomy-track) and [Conference](#oaei-ontology-alignment--conference-track), full 2025 field | **Not far enough.** 9th of 13 on Anatomy, level with the lightweight lexical matcher and +0.066 F1 over a string-equality baseline. Below every system and both baselines on Conference. Precision is competitive; recall is the failure. |
+| **RQ3** | In ontology alignment, which carries the result: how the similarity signals are weighted, or the constraint that the matching be 1-to-1? | [OAEI Anatomy](#oaei-ontology-alignment--anatomy-track), 5 weight configurations vs stable-matching ablation | **The constraint, overwhelmingly.** Removing stable matching as the only variable drops F1 from 0.829 to 0.728; the five-weight-configuration spread is 0.0033, and even that overstates it (the zero-structural-signal branch bypasses the weights entirely). |
+| **RQ4** | How far does an alignment system get on a biomedical track with **no** domain background knowledge (no UMLS, no BioPortal, no LLM oracle)? | [OAEI Anatomy](#oaei-ontology-alignment--anatomy-track) and [Conference](#oaei-ontology-alignment--conference-track), full 2025 field | **Not far enough.** 9th of 13 on Anatomy, level with the lightweight lexical matcher and +0.063 F1 over a string-equality baseline. Below every system and both baselines on Conference. Precision is competitive; recall is the failure. |
 | **RQ5** | Does a closed-world vocabulary check catch generated terms that open-world SHACL validation silently accepts? | [`onto-correctness-bench`](case-studies/onto-correctness-bench/): 3 vocabularies, 418 fabricated terms, 300 graphs | **Yes, completely.** SHACL returned `conforms=true` on **300/300** graphs containing a fabricated term. The closed-world gate flagged **300/300**, with zero false positives on clean graphs. Open-world semantics treat an undeclared predicate as merely unknown, so SHACL is structurally unable to see it. |
 
 RQ2 and RQ4 are the ones worth reading if you are deciding whether to trust this repo. Both are negative results about work done here.
@@ -448,13 +448,13 @@ The comparison below is the **complete** OAEI 2025 Anatomy field, reproduced fro
 | MDMapper | 0.899 | 0.879 | **0.889** |
 | LogMap | 0.917 | 0.848 | **0.881** |
 | LogMapKG | 0.917 | 0.848 | **0.881** |
-| **Open Ontologies** | **0.963** | **0.733** | **0.832** |
+| **Open Ontologies** | **0.960** | **0.730** | **0.829** |
 | DRAL-OA | 0.830 | 0.827 | **0.828** |
 | LogMapLt | 0.962 | 0.728 | **0.828** |
 | *StringEquiv (baseline)* | 0.997 | 0.622 | **0.766** |
 | LSMatch | 0.952 | 0.634 | **0.761** |
 
-**Read this honestly.** Open Ontologies ranks **9th of 13** on F1. Its precision (0.963) is third in the field, but its recall (0.733) is second-from-bottom among non-baseline systems, and the resulting F1 sits **level with LogMapLt**, the deliberately lightweight lexical matcher, and 0.109 below the leader. The `StringEquiv` baseline reaches 0.766 by normalised string equality alone, so the margin this system earns over pure string matching is **+0.066 F1**. That is the number to beat, and it is not yet a competitive result.
+**Read this honestly.** Open Ontologies ranks **9th of 13** on F1. Its precision (0.960) is third in the field, but its recall (0.730) is second-from-bottom among non-baseline systems, and the resulting F1 sits **level with LogMapLt**, the deliberately lightweight lexical matcher, and 0.112 below the leader. The `StringEquiv` baseline reaches 0.766 by normalised string equality alone, so the margin this system earns over pure string matching is **+0.063 F1**. That is the number to beat, and it is not yet a competitive result.
 
 The gap is recall, and its cause is identifiable: this system carries **no domain background knowledge**. Anatomy is a track where UMLS and BioPortal lookups are what separate the 0.88+ band from the rest, and every system above Open Ontologies in the table either uses biomedical background knowledge, an LLM oracle, or both. Alignment here uses 7 weighted signals (label similarity, property/parent/instance/restriction/neighbourhood overlap, embedding similarity), stable 1-to-1 matching, and a label penalty when no structural evidence is available.
 
@@ -462,7 +462,7 @@ The defensible finding from this track is therefore **not** the headline F1. It 
 
 | Configuration | Precision | Recall | F1 |
 | --- | ---: | ---: | ---: |
-| With stable matching (5 weight configurations) | 0.963 | 0.733 | 0.832 ± 0.004 |
+| With stable matching | 0.960 | 0.730 | 0.829 |
 | Without stable matching | 0.102 | 0.846 | 0.182 |
 
 Removing stable matching produces 12,557 candidates against a 1,516-mapping reference. See issues [#8](https://github.com/fabio-rovai/open-ontologies/issues/8), [#9](https://github.com/fabio-rovai/open-ontologies/issues/9), [#10](https://github.com/fabio-rovai/open-ontologies/issues/10); background-knowledge integration is the open work.
