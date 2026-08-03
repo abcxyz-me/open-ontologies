@@ -1056,7 +1056,12 @@ impl Tableau {
         }
 
         // 3. Redirect references: in all other nodes, replace remove_id with keep_id
-        let all_ids: Vec<u32> = self.nodes.keys().copied().collect();
+        let mut all_ids: Vec<u32> = self.nodes.keys().copied().collect();
+        // Sorted: HashMap iteration order is seeded per process, so an unsorted
+        // traversal makes expansion order (and therefore which checks finish
+        // inside budget) vary run to run. Node ids are assigned sequentially, so
+        // sorting by id is creation order.
+        all_ids.sort_unstable();
         for &nid in &all_ids {
             if nid == remove_id {
                 continue;
@@ -1108,7 +1113,12 @@ impl Tableau {
                 return false;
             }
             let mut changed = false;
-            let node_ids: Vec<u32> = self.nodes.keys().copied().collect();
+            let mut node_ids: Vec<u32> = self.nodes.keys().copied().collect();
+            // Sorted: HashMap iteration order is seeded per process, so an unsorted
+            // traversal makes expansion order (and therefore which checks finish
+            // inside budget) vary run to run. Node ids are assigned sequentially, so
+            // sorting by id is creation order.
+            node_ids.sort_unstable();
 
             for &nid in &node_ids {
                 if !self.nodes.contains_key(&nid) || self.nodes[&nid].blocked {
@@ -1216,7 +1226,12 @@ impl Tableau {
 
         // ── ≤-rule (MaxCard) with node merging ──────────────────────────
         // Check for MaxCard violations and merge nodes
-        let node_ids: Vec<u32> = self.nodes.keys().copied().collect();
+        let mut node_ids: Vec<u32> = self.nodes.keys().copied().collect();
+        // Sorted: HashMap iteration order is seeded per process, so an unsorted
+        // traversal makes expansion order (and therefore which checks finish
+        // inside budget) vary run to run. Node ids are assigned sequentially, so
+        // sorting by id is creation order.
+        node_ids.sort_unstable();
         for &nid in &node_ids {
             if !self.nodes.contains_key(&nid) || self.nodes[&nid].blocked {
                 continue;
@@ -1288,7 +1303,12 @@ impl Tableau {
         }
 
         // ── ⊔-rule: find unprocessed disjunction → branch ──────────────
-        let node_ids: Vec<u32> = self.nodes.keys().copied().collect();
+        let mut node_ids: Vec<u32> = self.nodes.keys().copied().collect();
+        // Sorted: HashMap iteration order is seeded per process, so an unsorted
+        // traversal makes expansion order (and therefore which checks finish
+        // inside budget) vary run to run. Node ids are assigned sequentially, so
+        // sorting by id is creation order.
+        node_ids.sort_unstable();
         for &nid in &node_ids {
             if !self.nodes.contains_key(&nid) || self.nodes[&nid].blocked {
                 continue;
@@ -1357,7 +1377,12 @@ impl Tableau {
 
     /// Subset blocking: node blocked by ancestor with ⊇ labels.
     fn update_blocking(&mut self) {
-        let node_ids: Vec<u32> = self.nodes.keys().copied().collect();
+        let mut node_ids: Vec<u32> = self.nodes.keys().copied().collect();
+        // Sorted: HashMap iteration order is seeded per process, so an unsorted
+        // traversal makes expansion order (and therefore which checks finish
+        // inside budget) vary run to run. Node ids are assigned sequentially, so
+        // sorting by id is creation order.
+        node_ids.sort_unstable();
         for &nid in &node_ids {
             let blocked = self.is_pairwise_blocked(nid);
             self.nodes.get_mut(&nid).unwrap().blocked = blocked;
@@ -1599,12 +1624,18 @@ impl DlReasoner {
     pub fn classify_parallel(&self) -> AgentClassificationResult {
         let start = Instant::now();
 
-        let classes: Vec<u32> = self
+        // Sorted for the same reason as the node traversals: `named_classes` is a
+        // HashSet, so its iteration order is seeded per process. That order fixes
+        // the order of `satisfiable`, which fixes the order of `pairs`, which
+        // decides which subsumption checks are reached before a budget runs out.
+        // Unsorted, classification is not a function of the ontology alone.
+        let mut classes: Vec<u32> = self
             .named_classes
             .iter()
             .filter(|&&c| c != self.thing_id && c != self.nothing_id)
             .copied()
             .collect();
+        classes.sort_unstable();
 
         // Global budget for the WHOLE classification.
         //
