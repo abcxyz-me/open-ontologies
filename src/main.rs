@@ -1253,7 +1253,22 @@ async fn async_main() -> anyhow::Result<()> {
                 }
             }
             eprintln!("Graph has {} triples total", graph.triple_count());
-            open_ontologies::socket::serve(&socket_path, graph).await?;
+
+            use tokio_util::sync::CancellationToken;
+            // Same rationale as the ServeHttp arm: this token is the sole
+            // shutdown trigger. Without the task below, the accept loop in
+            // socket::serve_with_shutdown never exits, the process can only be
+            // killed, and the socket file stays on disk after it is gone.
+            let ct = CancellationToken::new();
+            tokio::spawn({
+                let ct = ct.clone();
+                async move {
+                    shutdown_signal().await;
+                    eprintln!("Shutdown signal received — closing socket");
+                    ct.cancel();
+                }
+            });
+            open_ontologies::socket::serve_with_shutdown(&socket_path, graph, ct).await?;
         }
         #[cfg(windows)]
         Commands::ServeUnix { .. } => {
