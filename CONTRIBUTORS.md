@@ -19,6 +19,11 @@ Open Ontologies exists thanks to everyone who has built, used, broken, and impro
   - Identified that anonymous restriction classes (and any blank-node IRIs returned by SPARQL) get freshly minted IDs on every parse, producing ~40 phantom add/remove pairs plus a Cartesian product of confidence-scored "renames" on `detect(x, x)` for typical OWL ontologies (Pizza tutorial repro). Shipped a surgical filter on the `_:` prefix in `extract_vocabulary` that bought time for the proper successor (RDFC 1.0 canonicalisation via Oxigraph 0.5.8 — landed in [2e329ee](https://github.com/fabio-rovai/open-ontologies/commit/2e329ee)).
   - PR description quality (clear repro, minimal diff, full checklist of build/test/clippy/audit, CHANGELOG entry) is the model contributor experience.
 
+- **Ladislav Gazo** ([@lgazo](https://github.com/lgazo)) — opt-in persistent triple store ([PR #81](https://github.com/fabio-rovai/open-ontologies/pull/81)):
+  - A `[storage]` backend selector for the main graph: `memory` (default, unchanged) or `persistent`, opening a RocksDB-backed Oxigraph store at `<data_dir>/triplestore` so triples survive a restart. CLI flag, env override and config, with correct precedence, plus a drop-and-reopen round-trip test.
+  - Handled the case that would otherwise have quietly not worked: the one-shot CLI subcommands read the same setting, so `load` then `query` share state. Kept sandbox stores in-memory so only the main graph is ever persistent, and documented Oxigraph's single-writer-per-directory constraint rather than leaving it to be discovered.
+  - He wrote this on his fork in June and never opened a PR; it was found during a fork-network audit. If you are sitting on something similar, open the PR. We would rather review it than find it.
+
 ## How to be listed here
 
 Open a PR. If it lands on `main` (in whole or in part), you'll be added with a short note describing your contribution. Bots and machine-generated commits are not credited as people.
