@@ -687,6 +687,44 @@ fn build_tool_filter(
     })
 }
 
+/// Resolves when the process is asked to terminate.
+///
+/// Listens for ctrl-c on every platform and, on unix, for `SIGTERM` as well —
+/// the latter is what `docker stop`, systemd and Kubernetes actually send, so
+/// handling only ctrl-c would leave container shutdown unhandled. The unix arm
+/// is behind `#[cfg(unix)]` so the `x86_64-pc-windows-msvc` target in the
+/// release matrix still builds; there the future simply never resolves.
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        if let Err(e) = tokio::signal::ctrl_c().await {
+            eprintln!("Failed to install ctrl-c handler: {e}");
+            // Never resolve: a broken handler must not look like a shutdown request.
+            std::future::pending::<()>().await
+        }
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut sig) => {
+                sig.recv().await;
+            }
+            Err(e) => {
+                eprintln!("Failed to install SIGTERM handler: {e}");
+                std::future::pending::<()>().await
+            }
+        }
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {}
+        _ = terminate => {}
+    }
+}
+
 fn main() -> anyhow::Result<()> {
     // The root async future is polled on the calling thread. Windows gives
     // the main thread 1 MiB of stack (vs 8 MiB on Linux/macOS), which
@@ -956,6 +994,20 @@ async fn async_main() -> anyhow::Result<()> {
             };
 
             let ct = CancellationToken::new();
+            // This token is the SOLE shutdown trigger for the HTTP transport: it
+            // is handed to StreamableHttpServerConfig just below and awaited by
+            // `axum::serve(..).with_graceful_shutdown(..)` at the end of this arm.
+            // Nothing else cancels it, so the task spawned here is what makes that
+            // path reachable at all — without it the shutdown future pends forever
+            // and the process is killed outright, with the state DB never flushed.
+            tokio::spawn({
+                let ct = ct.clone();
+                async move {
+                    shutdown_signal().await;
+                    eprintln!("Shutdown signal received — stopping HTTP server");
+                    ct.cancel();
+                }
+            });
             // rmcp >=1.4 marks StreamableHttpServerConfig #[non_exhaustive], so it
             // can no longer be built with a struct literal from this crate. Start
             // from Default and set the public fields we care about.
