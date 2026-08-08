@@ -687,6 +687,54 @@ fn build_tool_filter(
     })
 }
 
+/// Resolves when the process is asked to terminate, naming the signal.
+///
+/// Listens for ctrl-c on every platform and, on unix, for `SIGTERM` as well —
+/// the latter is what `docker stop`, systemd and Kubernetes actually send, so
+/// handling only ctrl-c would leave container shutdown unhandled. The unix arm
+/// is behind `#[cfg(unix)]` so the `x86_64-pc-windows-msvc` target in the
+/// release matrix still builds; there the future simply never resolves.
+async fn shutdown_signal() -> &'static str {
+    let ctrl_c = async {
+        if let Err(e) = tokio::signal::ctrl_c().await {
+            eprintln!("Failed to install ctrl-c handler: {e}");
+            // Never resolve: a broken handler must not look like a shutdown request.
+            std::future::pending::<()>().await
+        }
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut sig) => {
+                sig.recv().await;
+            }
+            Err(e) => {
+                eprintln!("Failed to install SIGTERM handler: {e}");
+                std::future::pending::<()>().await
+            }
+        }
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => "ctrl-c",
+        _ = terminate => "SIGTERM",
+    }
+}
+
+/// Exit code conventionally reported for a process ended by `sig`.
+fn signal_exit_code(sig: &str) -> i32 {
+    // 128 + signal number: SIGINT = 2, SIGTERM = 15.
+    if sig == "ctrl-c" {
+        130
+    } else {
+        143
+    }
+}
+
 fn main() -> anyhow::Result<()> {
     // The root async future is polled on the calling thread. Windows gives
     // the main thread 1 MiB of stack (vs 8 MiB on Linux/macOS), which
@@ -956,6 +1004,31 @@ async fn async_main() -> anyhow::Result<()> {
             };
 
             let ct = CancellationToken::new();
+            // This token is the SOLE shutdown trigger for the HTTP transport: it
+            // is handed to StreamableHttpServerConfig just below and awaited by
+            // `axum::serve(..).with_graceful_shutdown(..)` at the end of this arm.
+            // Nothing else cancels it, so the task spawned here is what makes that
+            // path reachable at all — without it the shutdown future pends forever
+            // and the process is killed outright, with the state DB never flushed.
+            tokio::spawn({
+                let ct = ct.clone();
+                async move {
+                    let sig = shutdown_signal().await;
+                    eprintln!("{sig} received — stopping HTTP server");
+                    ct.cancel();
+                    // Tokio installs its signal handlers process-wide and never
+                    // removes them, so from here the default terminate
+                    // disposition is gone for good. If graceful shutdown then
+                    // stalls — a long synchronous /api/query or /api/load holds
+                    // its connection open, and axum waits for in-flight
+                    // requests — a second signal would be swallowed and only
+                    // SIGKILL would end the process. Stay listening so the
+                    // second one is decisive.
+                    let sig = shutdown_signal().await;
+                    eprintln!("Second {sig} while shutting down — forcing exit");
+                    std::process::exit(signal_exit_code(sig));
+                }
+            });
             // rmcp >=1.4 marks StreamableHttpServerConfig #[non_exhaustive], so it
             // can no longer be built with a struct literal from this crate. Start
             // from Default and set the public fields we care about.
@@ -1201,7 +1274,32 @@ async fn async_main() -> anyhow::Result<()> {
                 }
             }
             eprintln!("Graph has {} triples total", graph.triple_count());
-            open_ontologies::socket::serve(&socket_path, graph).await?;
+
+            use tokio_util::sync::CancellationToken;
+            // Same rationale as the ServeHttp arm: this token is the sole
+            // shutdown trigger. Without the task below, the accept loop in
+            // socket::serve_with_shutdown never exits, the process can only be
+            // killed, and the socket file stays on disk after it is gone.
+            let ct = CancellationToken::new();
+            tokio::spawn({
+                let ct = ct.clone();
+                let socket_path = socket_path.clone();
+                async move {
+                    let sig = shutdown_signal().await;
+                    eprintln!("{sig} received — closing socket");
+                    ct.cancel();
+                    // Same reasoning as the ServeHttp arm: tokio's handlers are
+                    // installed for the process lifetime, so a second signal
+                    // would be swallowed if the accept loop were slow to unwind.
+                    // Unlink on the forced path too, so the escape hatch does
+                    // not reintroduce the leaked socket this commit removes.
+                    let sig = shutdown_signal().await;
+                    eprintln!("Second {sig} while shutting down — forcing exit");
+                    let _ = std::fs::remove_file(&socket_path);
+                    std::process::exit(signal_exit_code(sig));
+                }
+            });
+            open_ontologies::socket::serve_with_shutdown(&socket_path, graph, ct).await?;
         }
         #[cfg(windows)]
         Commands::ServeUnix { .. } => {
