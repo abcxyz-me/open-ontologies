@@ -1,4 +1,5 @@
 use std::io::Cursor;
+use std::path::Path;
 use std::sync::Mutex;
 
 use oxigraph::io::{RdfFormat, RdfParser, RdfSerializer};
@@ -64,6 +65,30 @@ impl GraphStore {
         Self {
             store: Mutex::new(Store::new().expect("Failed to create Oxigraph store")),
         }
+    }
+
+    /// Open a RocksDB-backed persistent store at `path`, creating it if missing.
+    ///
+    /// Oxigraph allows only one read-write handle per directory; opening the
+    /// same path from a second process will fail. Sandbox stores throughout
+    /// the codebase keep using [`GraphStore::new`] — only the main graph
+    /// should ever be persistent.
+    pub fn open_persistent(path: &Path) -> anyhow::Result<Self> {
+        std::fs::create_dir_all(path).map_err(|e| {
+            anyhow::anyhow!(
+                "failed to create persistent triplestore directory {}: {e}",
+                path.display()
+            )
+        })?;
+        let store = Store::open(path).map_err(|e| {
+            anyhow::anyhow!(
+                "failed to open persistent Oxigraph store at {}: {e}",
+                path.display()
+            )
+        })?;
+        Ok(Self {
+            store: Mutex::new(store),
+        })
     }
 
     pub fn triple_count(&self) -> usize {
