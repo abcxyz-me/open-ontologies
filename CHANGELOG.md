@@ -4,6 +4,24 @@ All notable changes to Open Ontologies are documented here.
 
 ## [Unreleased]
 
+### Added
+- **Opt-in persistent triple store.** A new `[storage]` section selects the
+  backend for the main graph: `mode = "memory"` (default, unchanged behaviour)
+  or `mode = "persistent"`, which opens a RocksDB-backed Oxigraph store at
+  `<data_dir>/triplestore` so triples survive a restart. Override with
+  `OPEN_ONTOLOGIES_STORAGE_MODE` or `--storage-mode` on `serve` / `serve-http`;
+  precedence is CLI, then env, then config, then the default. Unknown values
+  warn and fall back to `memory` rather than failing.
+
+  The one-shot CLI subcommands read the same setting, so `open-ontologies load
+  foo.ttl` followed by `open-ontologies query ...` shares state when
+  persistence is on. Sandbox stores elsewhere in the codebase stay in-memory;
+  only the main graph is ever persistent.
+
+  Note that Oxigraph permits a single read-write handle per directory, so two
+  server processes pointed at the same `data_dir` will fail to open the second
+  store. Contributed by Ladislav Gazo (@lgazo).
+
 ### Fixed
 - **SQL floating-point columns were mapped to `xsd:decimal`.** `real`,
   `float4`, `float`, `float8`, `double` and `double precision` all resolved to

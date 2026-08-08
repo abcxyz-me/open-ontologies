@@ -327,8 +327,29 @@ pub enum StorageMode {
 /// (`memory`). Unknown values fall back to `memory` with a warning printed to
 /// stderr — preserves the historical in-memory behaviour for typos.
 pub fn resolve_storage_mode(cfg: &StorageConfig) -> StorageMode {
-    let raw = std::env::var("OPEN_ONTOLOGIES_STORAGE_MODE")
-        .ok()
+    let from_env = std::env::var("OPEN_ONTOLOGIES_STORAGE_MODE").ok();
+    resolve_storage_mode_from(from_env.as_deref(), cfg)
+}
+
+/// Resolve the storage mode from an explicitly supplied override.
+///
+/// This is the pure half of [`resolve_storage_mode`]: it takes the override
+/// string rather than reading the environment, so every branch can be
+/// exercised without mutating process-global state.
+///
+/// That matters more than it looks. `std::env::set_var` and `remove_var` are
+/// `unsafe` in edition 2024 because the environment is shared mutable state
+/// with no synchronisation, and cargo runs the test functions within a test
+/// binary on parallel threads. A test that mutates the variable while another
+/// thread is inside `std::env::var` is a data race, whether or not it happens
+/// to pass. Testing against this function instead of the environment removes
+/// the hazard rather than narrowing the window.
+pub fn resolve_storage_mode_from(
+    raw_override: Option<&str>,
+    cfg: &StorageConfig,
+) -> StorageMode {
+    let raw = raw_override
+        .map(str::to_owned)
         .filter(|v| !v.trim().is_empty())
         .unwrap_or_else(|| cfg.mode.clone());
     match raw.trim().to_lowercase().as_str() {

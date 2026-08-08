@@ -1,4 +1,4 @@
-use open_ontologies::config::{resolve_storage_mode, StorageConfig, StorageMode};
+use open_ontologies::config::{resolve_storage_mode_from, StorageConfig, StorageMode};
 use open_ontologies::graph::GraphStore;
 use tempfile::TempDir;
 
@@ -31,16 +31,20 @@ fn persistent_store_survives_drop_and_reopen() {
     }
 }
 
+// These exercise `resolve_storage_mode_from` rather than `resolve_storage_mode`
+// so that no test has to touch the process environment. `remove_var` is unsafe
+// under edition 2024 for a real reason: cargo runs these test functions on
+// parallel threads, so mutating the environment while another thread reads it
+// is a data race regardless of whether the assertion happens to hold.
+// Passing the override in explicitly tests the same logic with the hazard gone.
+
 #[test]
 fn storage_mode_resolves_default_to_memory() {
     let cfg = StorageConfig::default();
-    // Guard against a stray env var in the test runner shell.
-    // SAFETY: tests run single-threaded for env mutation by default in cargo;
-    // this is only touched here, so no cross-test interference.
-    unsafe {
-        std::env::remove_var("OPEN_ONTOLOGIES_STORAGE_MODE");
-    }
-    assert_eq!(resolve_storage_mode(&cfg), StorageMode::Memory);
+    assert_eq!(
+        resolve_storage_mode_from(None, &cfg),
+        StorageMode::Memory
+    );
 }
 
 #[test]
@@ -48,8 +52,62 @@ fn storage_mode_parses_persistent() {
     let cfg = StorageConfig {
         mode: "persistent".to_string(),
     };
-    unsafe {
-        std::env::remove_var("OPEN_ONTOLOGIES_STORAGE_MODE");
+    assert_eq!(
+        resolve_storage_mode_from(None, &cfg),
+        StorageMode::Persistent
+    );
+}
+
+#[test]
+fn storage_mode_override_beats_config() {
+    let cfg = StorageConfig {
+        mode: "persistent".to_string(),
+    };
+    assert_eq!(
+        resolve_storage_mode_from(Some("memory"), &cfg),
+        StorageMode::Memory
+    );
+}
+
+#[test]
+fn storage_mode_blank_override_falls_through_to_config() {
+    let cfg = StorageConfig {
+        mode: "persistent".to_string(),
+    };
+    assert_eq!(
+        resolve_storage_mode_from(Some("   "), &cfg),
+        StorageMode::Persistent
+    );
+}
+
+#[test]
+fn storage_mode_accepts_aliases_case_insensitively() {
+    let cfg = StorageConfig::default();
+    for alias in ["persistent", "disk", "rocksdb", "RocksDB", "  DISK  "] {
+        assert_eq!(
+            resolve_storage_mode_from(Some(alias), &cfg),
+            StorageMode::Persistent,
+            "alias {alias:?} should select the persistent backend"
+        );
     }
-    assert_eq!(resolve_storage_mode(&cfg), StorageMode::Persistent);
+    for alias in ["memory", "mem", "in-memory", "IN-MEMORY"] {
+        assert_eq!(
+            resolve_storage_mode_from(Some(alias), &cfg),
+            StorageMode::Memory,
+            "alias {alias:?} should select the in-memory backend"
+        );
+    }
+}
+
+#[test]
+fn storage_mode_unknown_value_falls_back_to_memory() {
+    let cfg = StorageConfig {
+        mode: "persistent".to_string(),
+    };
+    // A typo must not silently promote an in-memory deployment to a
+    // persistent one, nor hard-fail: it warns and degrades to memory.
+    assert_eq!(
+        resolve_storage_mode_from(Some("persistant"), &cfg),
+        StorageMode::Memory
+    );
 }
