@@ -203,8 +203,16 @@ open-ontologies serve-http --host 127.0.0.1 --port 8080
 | Route | Auth | Purpose |
 |---|---|---|
 | `/mcp` | bearer, if a token is configured | MCP Streamable HTTP — the `onto_*` tools |
-| `/api/*` | bearer, if a token is configured | stats, events and other introspection |
+| `/api/stats`, `/api/lineage` | bearer, if a token is configured | read-only introspection |
+| `/api/query` | bearer, if a token is configured | SPARQL SELECT |
+| `/api/update`, `/api/load`, `/api/load-turtle`, `/api/save` | bearer, if a token is configured | **mutating** — SPARQL UPDATE, and `/load` / `/save` read and write files on the server at a path taken from the request body |
 | `/health` | never | liveness probe |
+
+> **The HTTP surface is not read-only.** When no token is configured the bearer
+> layer is not installed at all, so every route above — including the ones that
+> write to the server's filesystem — is reachable by anyone who can open the
+> port. Set a token, or bind to a loopback address, whenever the port is
+> reachable by anything other than the local process.
 
 `/health` returns `{"status":"ok","version":"<crate version>"}` and is
 deliberately outside the bearer layer, so an orchestrator can probe the process
