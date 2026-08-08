@@ -191,6 +191,28 @@ Add to `.cursor/mcp.json` or equivalent:
 
 </details>
 
+<details>
+<summary><strong>HTTP transport (<code>serve-http</code>)</strong></summary>
+
+For clients that speak MCP over HTTP rather than stdio:
+
+```bash
+open-ontologies serve-http --host 127.0.0.1 --port 8080
+```
+
+| Route | Auth | Purpose |
+|---|---|---|
+| `/mcp` | bearer, if a token is configured | MCP Streamable HTTP — the `onto_*` tools |
+| `/api/*` | bearer, if a token is configured | stats, events and other introspection |
+| `/health` | never | liveness probe |
+
+`/health` returns `{"status":"ok","version":"<crate version>"}` and is
+deliberately outside the bearer layer, so an orchestrator can probe the process
+without holding API credentials. It reports nothing about loaded state — use
+`/api/stats` for that.
+
+</details>
+
 ### Build your first ontology
 
 ```text

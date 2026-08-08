@@ -1143,6 +1143,25 @@ async fn async_main() -> anyhow::Result<()> {
             } else {
                 router
             };
+            // Liveness probe. Registered AFTER the bearer layer on purpose:
+            // `Router::layer` only wraps the routes already present, so adding
+            // /health here leaves it outside the auth middleware while /api and
+            // /mcp stay behind it. Putting it inside the `if let` branch above,
+            // or before the layer call, would make it require credentials in the
+            // one deployment where an unauthenticated probe is the point.
+            //
+            // The body is deliberately limited to status and version: an
+            // unauthenticated endpoint should not describe loaded state, which is
+            // exactly why /api/stats is not the right thing to probe.
+            let router = router.route(
+                "/health",
+                axum::routing::get(|| async {
+                    axum::Json(serde_json::json!({
+                        "status": "ok",
+                        "version": env!("CARGO_PKG_VERSION"),
+                    }))
+                }),
+            );
             let router = router.layer(tower_http::cors::CorsLayer::permissive());
             let addr = format!("{host}:{port}");
             let listener = tokio::net::TcpListener::bind(&addr).await?;
