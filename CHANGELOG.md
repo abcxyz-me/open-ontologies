@@ -13,6 +13,25 @@ All notable changes to Open Ontologies are documented here.
   generated ontologies invisibly. Also records the decisions the table encodes
   (parameters stripped, timezone not represented, `xsd:string` catch-all) and
   what the schema import derives beyond the datatype.
+- **CI builds, lints and tests the optional features.** A `features` job adds a
+  breadth leg (`cargo check` + `cargo clippy --all-targets` at `--all-features`)
+  and a depth leg (`cargo test --features postgres,duckdb,embeddings,sql`), with
+  `rust-cache` keyed per feature set. `default = []`, so none of `postgres`,
+  `duckdb`, `sql`, `embeddings` or `causal-pywhy` — nor the `sqlx`, `duckdb`,
+  `tract-onnx`, `tokenizers` and `instant-distance` trees — was compiled by
+  anything in CI before this.
+
+  The first run of the breadth leg found `clippy::large_enum_variant` in
+  `src/embed.rs`, a lint that could not have fired before because nothing
+  compiled `embeddings`.
+
+  `scripts/check-test-collection.sh` fails the run when a test file whose gate
+  is enabled collects zero tests. Eight files under `tests/` had never been
+  collected once, 56 tests in total; a file that collects nothing reports
+  "test result: ok" and is indistinguishable from a passing one. The enabled
+  set is derived from the cargo flags the test step used and expanded through
+  `[features]`, so `--features sql` counts as postgres + duckdb; files whose
+  gate is off in a given leg are skipped, so partial-feature legs stay green.
 - **Build provenance and checksums on release binaries.** The release job now
   emits a Sigstore attestation via `actions/attest-build-provenance`, binding
   each published binary to the workflow run and the commit it was built from,

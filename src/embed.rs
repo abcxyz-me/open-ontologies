@@ -137,6 +137,14 @@ impl TextEmbedder {
 
 /// Unified text embedder that dispatches to either the local ONNX model or
 /// an OpenAI-compatible HTTP API, selected by configuration.
+// clippy::large_enum_variant fires here (Local is ~1.4 KB against ~100 bytes for
+// OpenAI) and the lint had never run, because nothing in CI compiled the
+// `embeddings` feature. Boxing is not the right answer for this one: the value
+// is built once at startup and immediately parked in an `Arc` (server.rs), then
+// only ever borrowed — it is never moved in a hot path or stored in a
+// collection. The box would buy an indirection on every embed call and change a
+// public type, to save a single move of 1.4 KB at boot.
+#[allow(clippy::large_enum_variant)]
 pub enum TextEmbedderProvider {
     Local(TextEmbedder),
     OpenAI(crate::embed_remote::OpenAIEmbedder),
