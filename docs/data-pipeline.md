@@ -175,9 +175,23 @@ not record which flavour the column was.
 
 **The catch-all is the one to watch.** Any type not listed above becomes
 `xsd:string` silently — DuckDB `LIST`, `STRUCT` and `MAP`, Postgres `jsonb`,
-arrays, `interval`, `inet`, enums, and domain types. A structured column
-becomes an untyped literal with no warning. If your schema leans on those,
-override the mapping explicitly rather than relying on inference.
+arrays, `interval`, `inet`, enums, and domain types. A structured column gets
+`rdfs:range xsd:string` with no warning.
+
+The declarative `datatype` field above **cannot** correct this.
+`SchemaIntrospector::generate_turtle` takes only the introspected tables and a
+base IRI; it never reads a mapping, and `import-schema` accepts no mapping
+argument. A mapping governs the literals ingest produces later, not the ranges
+the schema import asserts — so setting one leaves the generated ontology
+unchanged and can leave the two disagreeing. Two remedies that do work:
+
+- **Cast before importing.** Import from a view that presents the column as a
+  type in the table above. Effective for domain types, aliases and anything
+  numeric-adjacent; it cannot rescue a `STRUCT`.
+- **Amend the range after importing.** The generated ontology is loaded into
+  the triple store, so a SPARQL `UPDATE` replacing the `rdfs:range` of the
+  affected property is a supported edit. Pair it with SHACL when the real
+  constraint is richer than a datatype.
 
 ### What else the schema import decides
 
@@ -187,12 +201,21 @@ matter when reading the generated ontology:
 - **Foreign key columns never reach this table.** They become an
   `owl:ObjectProperty` whose `rdfs:range` is the parent class, not a datatype
   property.
-- **Primary key columns** get `owl:FunctionalProperty` in addition to
-  `owl:DatatypeProperty`.
+- **Primary key columns that are not also foreign keys** get
+  `owl:FunctionalProperty` in addition to `owl:DatatypeProperty`. The foreign
+  key branch is taken first, so a shared primary key — the 1:1 pattern where a
+  table's PK is also an FK to its parent — yields an `owl:ObjectProperty` only,
+  with no functional axiom.
 - **`NOT NULL` columns** add an `owl:Restriction` subclass axiom with
   `owl:minCardinality 1`.
-- **Property names** are `<table>_<column>`; class names are the table name in
-  PascalCase.
+- **Property names** are `<table>_<column>`; class names are the table name
+  split on `_` with each segment capitalised. That is PascalCase for
+  snake_case identifiers, which is the assumed shape. It is only a split on
+  underscores: a quoted identifier containing spaces or hyphens passes through
+  unchanged, so `"order details"` yields the class `Order details` and the
+  property `db:order details_qty` — neither of which is a valid Turtle
+  prefixed name. Sanitise such identifiers, or import through a view that
+  renames them.
 
 ### Versioning
 
