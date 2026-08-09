@@ -5,6 +5,29 @@ All notable changes to Open Ontologies are documented here.
 ## [Unreleased]
 
 ### Added
+- **Build provenance and checksums on release binaries.** The release job now
+  emits a Sigstore attestation via `actions/attest-build-provenance`, binding
+  each published binary to the workflow run and the commit it was built from,
+  and publishes a `SHASUMS.txt` alongside the assets. The release job gains
+  `id-token: write` and `attestations: write` for the signing identity.
+
+  Verify provenance with:
+
+  ```
+  gh attestation verify <binary> --repo fabio-rovai/open-ontologies
+  ```
+
+  Or check the checksum of the binary you downloaded. `SHASUMS.txt` lists all
+  four platforms, so verify the one you have rather than the whole file:
+
+  ```
+  grep open-ontologies-x86_64-unknown-linux-gnu SHASUMS.txt | sha256sum -c -
+  # macOS: ... | shasum -a 256 -c -
+  ```
+
+  A bare `sha256sum -c SHASUMS.txt` expects all four binaries present and exits
+  non-zero when three are missing, which is the normal case. With GNU coreutils
+  you can also pass `--ignore-missing`; the form above works on macOS too.
 - **Opt-in persistent triple store.** A new `[storage]` section selects the
   backend for the main graph: `mode = "memory"` (default, unchanged behaviour)
   or `mode = "persistent"`, which opens a RocksDB-backed Oxigraph store at
