@@ -4,6 +4,36 @@ All notable changes to Open Ontologies are documented here.
 
 ## [Unreleased]
 
+### Fixed
+- **SQLite migrations discarded every error and tracked no schema version.**
+  `StateDb::open` upgraded old databases with two `let _ = conn.execute_batch(...)`
+  calls. Discarding the result swallowed the expected "duplicate column name" on
+  an already-upgraded database, but it swallowed a locked file, an I/O error and
+  a partially-applied batch with it, and `open` returned `Ok` regardless.
+
+  `PRAGMA user_version` now records the schema version, and each migration
+  applies inside a transaction that commits the DDL and the version bump
+  together. Columns are checked individually with `PRAGMA table_info` before
+  being added, so only the genuine already-exists case is tolerated and every
+  other error propagates.
+
+  Per-column checking also heals the state the old code could produce and not
+  detect. `execute_batch` stops at its first error, so a database whose first
+  `ALTER` committed and whose second did not was left with `webhook_url` and no
+  `webhook_headers` — and re-running the pair would fail on the column that was
+  already there, permanently. Verified against real rusqlite semantics, not
+  assumed: the old idiom leaves the column missing and still returns `Ok`.
+
+  Databases predating the tracker all report `user_version = 0` whether they
+  carry the columns or not, which is why the version alone cannot decide what to
+  do and the column probe is the thing that establishes truth.
+
+  `tests/state_migration_test.rs` covers this against hand-built binary fixtures
+  in `tests/fixtures/state/`: a pre-migration database, and a half-applied one.
+  The fixtures are committed rather than generated, because a fixture built by
+  the code under test would agree with a broken migration by construction.
+  Reported in #75.
+
 ### Added
 - **Versioned SQL type → XSD datatype contract.** `docs/data-pipeline.md` now
   documents what `SchemaIntrospector::sql_to_xsd` produces for every SQL type it
