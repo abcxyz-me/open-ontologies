@@ -44,7 +44,7 @@ jobs:
   # dependency trees they pull in (sqlx, duckdb, tract-onnx, tokenizers,
   # instant-distance).
   #
-  # It is also why seven test files under tests/ had never been collected once.
+  # It is also why eight test files under tests/ had never been collected once.
   # tests/schema_test.rs is gated on `postgres` and covers
   # SchemaIntrospector::sql_to_xsd, which carried a real defect the whole time
   # (#76, fixed in #80): the test existed, and it was dark.
@@ -61,6 +61,7 @@ jobs:
           # Breadth: everything compiles and lints, including causal-pywhy,
           # whose Rust side has no dependencies of its own.
           - name: breadth (all-features)
+            cache_key: breadth
             flags: --all-features
             test: false
           # Depth: everything whose tests run without external services.
@@ -68,9 +69,9 @@ jobs:
           # to Python/DoWhy at runtime, which is a service dependency in all but
           # name. It is still compiled and linted by the breadth leg.
           - name: depth (postgres,duckdb,embeddings,sql)
+            cache_key: depth
             flags: --features postgres,duckdb,embeddings,sql
             test: true
-            features_list: postgres duckdb embeddings sql
     env:
       CARGO_INCREMENTAL: 0
       CARGO_PROFILE_DEV_DEBUG: 0
@@ -88,9 +89,12 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@v2
         with:
-          # Keyed on the feature set: the legs build disjoint dependency trees,
-          # and sharing one cache between them would thrash it on every run.
-          key: ${{ matrix.name }}
+          # Keyed per leg: they build disjoint dependency trees, and sharing one
+          # cache between them would thrash it on every run. Not `matrix.name` —
+          # GitHub rejects cache keys containing commas, and the rejection is a
+          # log annotation rather than a failing step, so the leg would keep
+          # running uncached and silent.
+          key: ${{ matrix.cache_key }}
       - name: Check
         run: cargo check ${{ matrix.flags }} --all-targets
       - name: Clippy
@@ -104,4 +108,7 @@ jobs:
           cargo test ${{ matrix.flags }} 2>&1 | tee cargo-test.log
       - name: Verify every enabled test file collected tests
         if: matrix.test
-        run: bash scripts/check-test-collection.sh cargo-test.log "${{ matrix.features_list }}"
+        # Same flags as the test step, so the enabled set cannot drift from what
+        # was actually built. The script expands them through [features], which
+        # a hand-written list would not: `sql` implies postgres + duckdb.
+        run: bash scripts/check-test-collection.sh cargo-test.log "${{ matrix.flags }}"

@@ -13,10 +13,16 @@ All notable changes to Open Ontologies are documented here.
   `tract-onnx`, `tokenizers` and `instant-distance` trees — was compiled by
   anything in CI before this.
 
+  The first run of the breadth leg found `clippy::large_enum_variant` in
+  `src/embed.rs`, a lint that could not have fired before because nothing
+  compiled `embeddings`.
+
   `scripts/check-test-collection.sh` fails the run when a test file whose gate
-  is enabled collects zero tests. Seven files under `tests/` had never been
-  collected once, 53 tests in total; a file that collects nothing reports
-  "test result: ok" and is indistinguishable from a passing one. Files whose
+  is enabled collects zero tests. Eight files under `tests/` had never been
+  collected once, 56 tests in total; a file that collects nothing reports
+  "test result: ok" and is indistinguishable from a passing one. The enabled
+  set is derived from the cargo flags the test step used and expanded through
+  `[features]`, so `--features sql` counts as postgres + duckdb; files whose
   gate is off in a given leg are skipped, so partial-feature legs stay green.
 - **Opt-in persistent triple store.** A new `[storage]` section selects the
   backend for the main graph: `mode = "memory"` (default, unchanged behaviour)
