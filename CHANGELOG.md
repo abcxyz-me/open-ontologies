@@ -5,6 +5,14 @@ All notable changes to Open Ontologies are documented here.
 ## [Unreleased]
 
 ### Added
+- **Versioned SQL type → XSD datatype contract.** `docs/data-pipeline.md` now
+  documents what `SchemaIntrospector::sql_to_xsd` produces for every SQL type it
+  recognises, alongside the declarative `datatype` mapping field it is easy to
+  confuse it with. The table is marked v1 and any row that changes gets a
+  CHANGELOG entry, so a `schema.rs` refactor can no longer alter the shape of
+  generated ontologies invisibly. Also records the decisions the table encodes
+  (parameters stripped, timezone not represented, `xsd:string` catch-all) and
+  what the schema import derives beyond the datatype.
 - **CI builds, lints and tests the optional features.** A `features` job adds a
   breadth leg (`cargo check` + `cargo clippy --all-targets` at `--all-features`)
   and a depth leg (`cargo test --features postgres,duckdb,embeddings,sql`), with
