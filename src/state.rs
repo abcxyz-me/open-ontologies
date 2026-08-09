@@ -133,6 +133,123 @@ CREATE TABLE IF NOT EXISTS ontology_cache (
 );
 ";
 
+/// A column an upgrade adds to an existing table.
+///
+/// `CREATE TABLE IF NOT EXISTS` in [`SCHEMA`] already declares every column, so
+/// a database created today needs none of these. They exist only for databases
+/// created before the column was introduced.
+struct ColumnAddition {
+    table: &'static str,
+    column: &'static str,
+    ddl: &'static str,
+}
+
+/// One schema upgrade step. Applied inside a single transaction, after which
+/// `PRAGMA user_version` is set to `version`.
+struct Migration {
+    version: i64,
+    description: &'static str,
+    columns: &'static [ColumnAddition],
+}
+
+/// Ordered schema migrations. Append only, never renumber: the version is
+/// recorded in every `open-ontologies.db` in the field.
+const MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        description: "monitor webhook delivery columns",
+        columns: &[
+            ColumnAddition {
+                table: "monitor_watchers",
+                column: "webhook_url",
+                ddl: "ALTER TABLE monitor_watchers ADD COLUMN webhook_url TEXT",
+            },
+            ColumnAddition {
+                table: "monitor_watchers",
+                column: "webhook_headers",
+                ddl: "ALTER TABLE monitor_watchers ADD COLUMN webhook_headers TEXT",
+            },
+        ],
+    },
+    Migration {
+        version: 2,
+        description: "align feedback signal payload",
+        columns: &[ColumnAddition {
+            table: "align_feedback",
+            column: "signals_json",
+            ddl: "ALTER TABLE align_feedback ADD COLUMN signals_json TEXT",
+        }],
+    },
+];
+
+/// Schema version a freshly-opened database is brought up to.
+pub const SCHEMA_VERSION: i64 = 2;
+
+/// Is `column` present on `table`?
+///
+/// This is the `PRAGMA table_info` probe that replaces the old
+/// discard-the-error idiom. Asking whether the column is there lets a genuine
+/// failure (locked file, I/O error, corrupt page) propagate, where
+/// `let _ = execute_batch(...)` swallowed it alongside the expected
+/// "duplicate column name".
+fn column_exists(conn: &Connection, table: &str, column: &str) -> Result<bool> {
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+    let mut rows = stmt.query([])?;
+    while let Some(row) = rows.next()? {
+        let name: String = row.get(1)?;
+        if name == column {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Bring the schema up to [`SCHEMA_VERSION`], recording progress in
+/// `PRAGMA user_version`.
+///
+/// Two properties matter here, and the previous implementation had neither.
+///
+/// **Errors propagate.** Only the expected "column already exists" case is
+/// tolerated, and it is handled by asking first rather than by discarding the
+/// result, so everything else surfaces.
+///
+/// **Each column is applied independently, inside a transaction.** Databases
+/// predating the tracker all report `user_version = 0` whether they have the
+/// columns or not, so the version alone cannot decide what to do — and a
+/// database can be *half* migrated, because the old code ran two `ALTER`s in
+/// one batch where the first could commit and the second fail. Checking per
+/// column heals that state instead of tripping over it: the applied column is
+/// skipped, the missing one is added.
+fn run_migrations(conn: &mut Connection) -> Result<()> {
+    let current: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+    if current >= SCHEMA_VERSION {
+        return Ok(());
+    }
+
+    for migration in MIGRATIONS.iter().filter(|m| m.version > current) {
+        let tx = conn.transaction()?;
+        for col in migration.columns {
+            if !column_exists(&tx, col.table, col.column)? {
+                tx.execute_batch(col.ddl).map_err(|e| {
+                    anyhow::anyhow!(
+                        "migration {} ({}) failed adding {}.{}: {e}",
+                        migration.version,
+                        migration.description,
+                        col.table,
+                        col.column
+                    )
+                })?;
+            }
+        }
+        // Inside the same transaction as the DDL: SQLite DDL is transactional,
+        // so the version bump and the columns it describes commit together or
+        // not at all. That is what makes a half-applied state unreachable.
+        tx.pragma_update(None, "user_version", migration.version)?;
+        tx.commit()?;
+    }
+    Ok(())
+}
+
 /// Minimal SQLite state store for ontology versioning.
 #[derive(Clone)]
 pub struct StateDb {
@@ -141,23 +258,21 @@ pub struct StateDb {
 
 impl StateDb {
     pub fn open(path: &Path) -> Result<Self> {
-        let conn = Connection::open(path)?;
+        let mut conn = Connection::open(path)?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
         conn.execute_batch(SCHEMA)?;
-        // Safe migration: add webhook columns if upgrading from older schema
-        let _ = conn.execute_batch(
-            "ALTER TABLE monitor_watchers ADD COLUMN webhook_url TEXT;
-             ALTER TABLE monitor_watchers ADD COLUMN webhook_headers TEXT;"
-        );
-        // Safe migration: add signals_json column for feedback-based weight learning
-        let _ = conn.execute_batch(
-            "ALTER TABLE align_feedback ADD COLUMN signals_json TEXT;"
-        );
+        run_migrations(&mut conn)?;
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
         })
+    }
+
+    /// Schema version recorded in this database's `PRAGMA user_version`.
+    pub fn schema_version(&self) -> Result<i64> {
+        let conn = self.conn.lock().unwrap();
+        Ok(conn.query_row("PRAGMA user_version", [], |r| r.get(0))?)
     }
 
     pub fn conn(&self) -> std::sync::MutexGuard<'_, Connection> {
