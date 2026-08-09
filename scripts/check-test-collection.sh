@@ -164,7 +164,14 @@ for f in tests/*.rs; do
 
     # cargo prints:  Running tests/foo.rs (target/debug/deps/foo-<hash>)
     # then, after a blank line:  running N tests
+    #
+    # The "Running" banner is colourised, and CI sets CARGO_TERM_COLOR=always,
+    # so the SGR reset sits between the word and the path. Strip CSI sequences
+    # before matching — a plain substring search finds nothing otherwise, and
+    # the failure is total rather than partial: every file looks unbuilt.
     count=$(awk -v target="$f" '
+        BEGIN { esc = sprintf("%c", 27) }
+        { gsub(esc "\\[[0-9;]*[a-zA-Z]", "") }
         index($0, "Running " target " ") { seen = 1; next }
         seen && $1 == "running" { print $2; exit }
     ' "$log")
@@ -186,9 +193,20 @@ if [ ${#empty[@]} -gt 0 ]; then
 fi
 
 if [ ${#missing[@]} -gt 0 ]; then
-    for f in "${missing[@]}"; do
-        echo "::error file=$f::no test target ran for this file"
-    done
+    # Not one finding per file: when nothing at all was located, the log is not
+    # what this script thinks it is, and printing 48 identical errors buries
+    # that. (It happened: CARGO_TERM_COLOR=always put an SGR reset between
+    # "Running" and the path, and every file looked unbuilt.)
+    if [ ${#missing[@]} -eq "$checked" ] && [ "$checked" -gt 1 ]; then
+        echo "::error::no test target was found for any of the $checked expected files"
+        echo "The log does not look like \`cargo test\` output at all. Check that the"
+        echo "test step really wrote it, and that the \"Running <path>\" banner still"
+        echo "has the format this script parses."
+    else
+        for f in "${missing[@]}"; do
+            echo "::error file=$f::no test target ran for this file"
+        done
+    fi
     status=1
 fi
 
