@@ -5,6 +5,14 @@ All notable changes to Open Ontologies are documented here.
 ## [Unreleased]
 
 ### Added
+- **Versioned SQL type → XSD datatype contract.** `docs/data-pipeline.md` now
+  documents what `SchemaIntrospector::sql_to_xsd` produces for every SQL type it
+  recognises, alongside the declarative `datatype` mapping field it is easy to
+  confuse it with. The table is marked v1 and any row that changes gets a
+  CHANGELOG entry, so a `schema.rs` refactor can no longer alter the shape of
+  generated ontologies invisibly. Also records the decisions the table encodes
+  (parameters stripped, timezone not represented, `xsd:string` catch-all) and
+  what the schema import derives beyond the datatype.
 - **Opt-in persistent triple store.** A new `[storage]` section selects the
   backend for the main graph: `mode = "memory"` (default, unchanged behaviour)
   or `mode = "persistent"`, which opens a RocksDB-backed Oxigraph store at

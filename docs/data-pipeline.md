@@ -112,6 +112,99 @@ accepted by `onto_ingest` (file rows) and `onto_sql_ingest` (SQL rows).
 When a mapping is omitted, `onto_ingest` / `onto_sql_ingest` auto-generate one
 from the column names so you can iterate fast and refine later.
 
+## SQL type → XSD datatype contract (v1)
+
+The `datatype` field documented just above is **declarative**: you write it, and
+`onto_ingest` / `onto_sql_ingest` honour it. This section is about the other
+mechanism — the **automatic** one. When `onto_import_schema` reads a live
+Postgres or DuckDB schema, nothing declares the datatypes; `SchemaIntrospector::sql_to_xsd`
+(`src/schema.rs`) infers them from the SQL type names. The two are easy to
+conflate and behave differently: a declared `datatype` is never overridden by
+this table, and this table never applies to a mapping you wrote by hand.
+
+Treat what follows as a contract. It is versioned, and any change to a row gets
+a CHANGELOG entry, because a change here silently alters the shape of every
+ontology generated downstream.
+
+### The table
+
+| SQL type (case-insensitive, parameters stripped) | XSD datatype |
+|---|---|
+| `integer` `int` `int4` `bigint` `int8` `smallint` `int2` `tinyint` `int1` `hugeint` `serial` `bigserial` `smallserial` `ubigint` `uinteger` `usmallint` `utinyint` | `xsd:integer` |
+| `numeric` `decimal` | `xsd:decimal` |
+| `real` `float4` | `xsd:float` |
+| `double precision` `double` `float8` `float` | `xsd:double` |
+| `boolean` `bool` | `xsd:boolean` |
+| `date` | `xsd:date` |
+| `timestamp` `timestamptz` `timestamp with time zone` `timestamp without time zone` `datetime` | `xsd:dateTime` |
+| `time` `time with time zone` `time without time zone` | `xsd:time` |
+| `bytea` `blob` | `xsd:hexBinary` |
+| `uuid` | `xsd:string` |
+| **anything else** | `xsd:string` |
+
+### The decisions behind it
+
+Each of these is defensible on its own and invisible without a document, which
+is the reason this page exists.
+
+**Parameters are stripped before matching.** `DECIMAL(18,2)` and `DECIMAL(38,10)`
+both become a bare `xsd:decimal`; `VARCHAR(255)` becomes `xsd:string`. Precision
+and scale are not represented in the range. If you need them enforced, express
+them with SHACL rather than expecting the range to carry them.
+
+**IEEE 754 floats are not `xsd:decimal`.** The value space of `xsd:decimal` is
+integers over powers of ten, so it cannot represent `NaN`, `INF` or `-INF`, and
+asserting it would claim an exactness the column does not have. `real` and
+`float4` are `xsd:float`; `double precision`, `double` and `float8` are
+`xsd:double`.
+
+**Bare `float` widens to `xsd:double`.** It is genuinely dialect-dependent —
+Postgres reads it as `float8`, DuckDB as an alias of `REAL`. Widening is the
+safe direction: every `xsd:float` value is exactly representable as an
+`xsd:double`, so calling a DuckDB single a double overstates the range without
+misrepresenting a value, whereas the reverse would declare a range narrower
+than the data. `float(p)` normalises to this arm as well.
+
+**Timezone information is not represented.** `timestamp with time zone` and
+`timestamp without time zone` both map to `xsd:dateTime`. XSD does distinguish
+them through the presence of an offset in the lexical form, but the range does
+not record which flavour the column was.
+
+**`uuid` is `xsd:string`, not `xsd:anyURI`.** A UUID is not a locator, and
+`xsd:string` keeps round-tripping lossless.
+
+**The catch-all is the one to watch.** Any type not listed above becomes
+`xsd:string` silently — DuckDB `LIST`, `STRUCT` and `MAP`, Postgres `jsonb`,
+arrays, `interval`, `inet`, enums, and domain types. A structured column
+becomes an untyped literal with no warning. If your schema leans on those,
+override the mapping explicitly rather than relying on inference.
+
+### What else the schema import decides
+
+The datatype is one of four things `onto_import_schema` derives, and the others
+matter when reading the generated ontology:
+
+- **Foreign key columns never reach this table.** They become an
+  `owl:ObjectProperty` whose `rdfs:range` is the parent class, not a datatype
+  property.
+- **Primary key columns** get `owl:FunctionalProperty` in addition to
+  `owl:DatatypeProperty`.
+- **`NOT NULL` columns** add an `owl:Restriction` subclass axiom with
+  `owl:minCardinality 1`.
+- **Property names** are `<table>_<column>`; class names are the table name in
+  PascalCase.
+
+### Versioning
+
+**v1** — the table above, first documented against the tree that includes the
+float-mapping correction (`real`/`float4` → `xsd:float`, `float8`/`double`/`float`
+→ `xsd:double`, previously all `xsd:decimal`).
+
+Any row that changes bumps this section and gets a CHANGELOG entry under
+`### Changed`. A refactor of `sql_to_xsd` that alters output without one is a
+breaking change to every downstream integrator at once, which is precisely what
+this contract exists to prevent.
+
 ## SQL ingest in three modes
 
 ### 1. Pull from PostgreSQL
@@ -186,6 +279,11 @@ The same query runs identically as MCP from Claude:
 `onto_import_schema` introspects a database, generates OWL, and loads it into
 the triple store. The same command works against PostgreSQL **and** DuckDB —
 only the connection string changes.
+
+The datatypes it infers are not ad hoc: see
+[SQL type → XSD datatype contract](#sql-type--xsd-datatype-contract-v1) for the
+full table, the catch-all behaviour, and what the import decides beyond the
+datatype (foreign keys, primary keys, `NOT NULL`).
 
 ```bash
 # Import a PostgreSQL schema as OWL (requires --features postgres)
