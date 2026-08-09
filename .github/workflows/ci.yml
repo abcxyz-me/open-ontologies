@@ -37,3 +37,71 @@ jobs:
         run: |
           cargo install cargo-audit
           cargo audit
+
+  # Optional features are compiled by nothing above: `default = []`, and the
+  # three cargo invocations in `build` are bare. A green run there says nothing
+  # about postgres, duckdb, sql, embeddings or causal-pywhy, nor about the
+  # dependency trees they pull in (sqlx, duckdb, tract-onnx, tokenizers,
+  # instant-distance).
+  #
+  # It is also why seven test files under tests/ had never been collected once.
+  # tests/schema_test.rs is gated on `postgres` and covers
+  # SchemaIntrospector::sql_to_xsd, which carried a real defect the whole time
+  # (#76, fixed in #80): the test existed, and it was dark.
+  #
+  # Ubuntu only. The bundled duckdb build dominates wall time and Windows would
+  # double it for no signal the Linux leg does not already give.
+  features:
+    name: features / ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Breadth: everything compiles and lints, including causal-pywhy,
+          # whose Rust side has no dependencies of its own.
+          - name: breadth (all-features)
+            flags: --all-features
+            test: false
+          # Depth: everything whose tests run without external services.
+          # causal-pywhy is left out here rather than everywhere — it shells out
+          # to Python/DoWhy at runtime, which is a service dependency in all but
+          # name. It is still compiled and linted by the breadth leg.
+          - name: depth (postgres,duckdb,embeddings,sql)
+            flags: --features postgres,duckdb,embeddings,sql
+            test: true
+            features_list: postgres duckdb embeddings sql
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_DEV_DEBUG: 0
+    steps:
+      - uses: actions/checkout@v4
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/powershell /usr/local/share/chromium /usr/local/share/edge
+          sudo apt-get clean
+          df -h
+      - name: Install build deps (OpenSSL/libpq)
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev libpq-dev
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # Keyed on the feature set: the legs build disjoint dependency trees,
+          # and sharing one cache between them would thrash it on every run.
+          key: ${{ matrix.name }}
+      - name: Check
+        run: cargo check ${{ matrix.flags }} --all-targets
+      - name: Clippy
+        # --all-targets so the gated tests are linted too. `-D warnings` over
+        # code that is never compiled is not a check.
+        run: cargo clippy ${{ matrix.flags }} --all-targets -- -D warnings
+      - name: Test
+        if: matrix.test
+        run: |
+          set -o pipefail
+          cargo test ${{ matrix.flags }} 2>&1 | tee cargo-test.log
+      - name: Verify every enabled test file collected tests
+        if: matrix.test
+        run: bash scripts/check-test-collection.sh cargo-test.log "${{ matrix.features_list }}"
