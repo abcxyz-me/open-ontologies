@@ -185,6 +185,34 @@ const MIGRATIONS: &[Migration] = &[
 /// Schema version a freshly-opened database is brought up to.
 pub const SCHEMA_VERSION: i64 = 2;
 
+/// Modelling-buffer vault: surrogate to original mappings, per session.
+///
+/// Declared alongside [`SCHEMA`] rather than as a migration because it is a new
+/// table, and `CREATE TABLE IF NOT EXISTS` already handles both the fresh and
+/// the upgrade case. [`MIGRATIONS`] exists for *columns added to tables that
+/// already shipped*, which is a different problem.
+///
+/// This never leaves the machine. See
+/// `docs/superpowers/specs/2026-08-09-modelling-buffer-design.md`.
+const BUFFER_SCHEMA: &str = "
+CREATE TABLE IF NOT EXISTS buffer_vault (
+    session_id TEXT NOT NULL,
+    surrogate TEXT NOT NULL,
+    original TEXT NOT NULL,
+    disposition TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (session_id, surrogate)
+);
+CREATE INDEX IF NOT EXISTS idx_buffer_vault_original
+    ON buffer_vault(session_id, original);
+
+CREATE TABLE IF NOT EXISTS buffer_sessions (
+    session_id TEXT PRIMARY KEY,
+    salt TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+";
+
 /// Is `column` present on `table`?
 ///
 /// This is the `PRAGMA table_info` probe that replaces the old
@@ -263,6 +291,7 @@ impl StateDb {
         conn.pragma_update(None, "foreign_keys", "ON")?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
         conn.execute_batch(SCHEMA)?;
+        conn.execute_batch(BUFFER_SCHEMA)?;
         run_migrations(&mut conn)?;
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),

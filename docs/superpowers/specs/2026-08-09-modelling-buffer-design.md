@@ -46,10 +46,19 @@ Three properties hold at build time that do not hold at query time:
 
 Point 3 carries more weight than it first appears. See *Verification* below.
 
-## Three dispositions, not two
+## Four dispositions
 
-Every term reaching the boundary is stripped, tokenised, or surrogated. Getting
-this split right is the substance of the design.
+Every term reaching the boundary passes, is stripped, is tokenised, or is
+surrogated. Getting this split right is the substance of the design.
+
+### Pass
+
+Generic domain vocabulary leaves unchanged. "Candidate", "Protein", "Phase III"
+and "Assay" are industry-standard terms and nobody's intellectual property.
+Substituting them would destroy the model's ability to name classes meaningfully
+while protecting nothing.
+
+Pass applies only to terms on an explicit allowlist. It is never a default.
 
 ### Strip
 
@@ -91,13 +100,19 @@ domains and ranges, and appropriate disjointness axioms.
 ### Choosing
 
 ```
-Is it an instance?                          -> strip
-Does the model need only identity/equality? -> tokenise
-Does the model need domain knowledge?       -> surrogate
+Is it an instance?                           -> strip
+Is it on the generic-vocabulary allowlist?   -> pass
+Does the model need only identity/equality?  -> tokenise
+Does the model need domain knowledge?        -> surrogate
+Anything else                                -> strip
 ```
 
 The classifier proposes a disposition per term. The human confirms it at the
 review gate. Unclassified defaults to **strip**.
+
+One fail-safe matters: if a term is classified `Surrogate` but no substitute is
+available for its class, it falls back to `Tokenise`, never to `Pass`. Every
+fallback in the system moves toward disclosing less.
 
 ## The contamination hazard, and the rule that contains it
 
