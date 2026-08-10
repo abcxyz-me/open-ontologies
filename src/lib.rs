@@ -2,6 +2,7 @@ pub mod align;
 pub mod align_fuzzy;
 pub mod batch;
 pub mod borderline_loop;
+pub mod buffer;
 pub mod cache;
 /// Compiled claim verification (Tardygrada Layer 3 hot path).
 pub mod claimcheck;
