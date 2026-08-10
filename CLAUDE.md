@@ -68,6 +68,7 @@ Claude dynamically decides the next tool call based on what the previous tool re
 | `onto_ingest` | To parse structured data (CSV, JSON, NDJSON, XML, YAML, XLSX, Parquet) into RDF and load into the store |
 | `onto_sql_ingest` | To run a SQL `SELECT` against PostgreSQL or DuckDB and ingest the result rows into RDF (uses the same mapping format as `onto_ingest`). DuckDB acts as a federation backbone via its `httpfs`/`parquet`/`csv`/`postgres_scanner`/`iceberg` extensions. Connection strings: `postgres://…`, `duckdb:///path.duckdb`, `:memory:`, or `*.duckdb` file path. |
 | `onto_map` | To generate a mapping config from data schema + loaded ontology for review |
+| `onto_ossie_import` | To compile an Apache Ossie (incubating, formerly Open Semantic Interchange) ontology document into OWL 2 DL + SHACL and optionally load it, making a vendor semantic model reasonable/validatable for the first time. Reports the four constructs OWL 2 DL cannot express (`OneToOne` onto a `ValueType`, `ManyToOne` on arity>=3, `derived_by`, non-scalar `requires`) instead of dropping them |
 | `onto_shacl` | To validate loaded data against SHACL shapes (cardinality, datatypes, classes) |
 | `onto_vocab_check` | To closed-world-check generated DATA: flags any predicate/class used that is not declared in the loaded ontology (hallucinated terms). Catches what open-world SHACL silently passes. Run on LLM-generated Turtle before `onto_load` |
 | `onto_reason` | To run RDFS or OWL-RL inference, materializing inferred triples |

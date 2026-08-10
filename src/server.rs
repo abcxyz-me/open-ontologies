@@ -916,6 +916,60 @@ impl OpenOntologiesServer {
             .unwrap_or_else(|e| format!(r#"{{"error":"{}"}}"#, e))
     }
 
+    #[tool(name = "onto_ossie_import", description = "Compile an Apache Ossie (incubating, formerly Open Semantic Interchange) ontology document into OWL 2 DL + SHACL, and optionally load it into the active store so every other tool here works on it. Ossie is the vendor-neutral semantic-model spec backed by Snowflake, Salesforce, Databricks, dbt Labs and ~50 other platforms; its ontology module is a fact-based conceptual model (EntityType/ValueType concepts, roles, multiplicities, verbalizations, identifiers, derivation rules) that references neither RDF, OWL, SKOS nor SHACL. That means an Ossie ontology is invisible to every reasoner and validator in the semantic web stack until it is compiled. This tool does the compile: concepts become owl:Class / rdfs:Datatype, binary relationships become object/datatype properties, `identify_by` becomes owl:hasKey, unary relationships become subclasses, arity>=3 relationships are reified (W3C n-ary pattern 1), and the recognised `requires` fragment becomes XSD facets mirrored into SHACL. FOUR Ossie constructs have no OWL 2 DL expression and are carried by SHACL or by annotation instead: OneToOne onto a ValueType (that is InverseFunctionalDataProperty, forbidden in OWL 2 DL — and it is the COMMON case, since a preferred identifier is by construction a relationship to a value type), ManyToOne on arity>=3 (a tuple functional dependency), `derived_by` (a recursive rule language) and `requires` beyond scalar comparison. Every one of these is reported in `issues` and preserved verbatim as an ossie: annotation, so nothing is silently dropped. After `load=true`, run onto_reason / onto_dl_explain / onto_shacl / onto_query against a semantic model that previously had no formal semantics at all.")]
+    async fn onto_ossie_import(&self, Parameters(input): Parameters<OntoOssieImportInput>) -> String {
+        use crate::ossie;
+
+        let source = if input.inline.unwrap_or(false) {
+            input.source.clone()
+        } else {
+            match std::fs::read_to_string(&input.source) {
+                Ok(content) => content,
+                Err(e) => {
+                    return serde_json::json!({
+                        "error": format!("cannot read Ossie ontology document: {e}")
+                    })
+                    .to_string()
+                }
+            }
+        };
+
+        let document = match ossie::parse_document(&source) {
+            Ok(document) => document,
+            Err(e) => return serde_json::json!({ "error": e }).to_string(),
+        };
+
+        let conversion = match ossie::to_owl_shacl(
+            &document,
+            input.base_iri.as_deref(),
+            input.emit_shacl.unwrap_or(true),
+        ) {
+            Ok(conversion) => conversion,
+            Err(e) => return serde_json::json!({ "error": e }).to_string(),
+        };
+
+        let mut report = match serde_json::to_value(&conversion) {
+            Ok(serde_json::Value::Object(mut map)) => {
+                // The Turtle is returned only on request; it is large.
+                map.remove("turtle");
+                serde_json::Value::Object(map)
+            }
+            Ok(other) => other,
+            Err(e) => return serde_json::json!({ "error": e.to_string() }).to_string(),
+        };
+
+        if input.load.unwrap_or(false) {
+            match self.graph.load_turtle(&conversion.turtle, None) {
+                Ok(count) => report["triples_loaded"] = serde_json::json!(count),
+                Err(e) => report["load_error"] = serde_json::json!(e.to_string()),
+            }
+        }
+        if input.include_turtle.unwrap_or(false) {
+            report["turtle"] = serde_json::json!(conversion.turtle);
+        }
+        report.to_string()
+    }
+
     #[tool(name = "onto_shacl_check", description = "Dry-run structural check on proposed SHACL shapes against the loaded ontology. Verifies that shapes parse as Turtle and that every IRI they reference (sh:targetClass, sh:path, sh:class) exists in the ontology, plus a lightweight XSD-prefix check on sh:datatype. Does NOT validate data — use onto_shacl for that. Use this to iterate on LLM-generated SHACL before applying.")]
     async fn onto_shacl_check(&self, Parameters(input): Parameters<OntoShaclCheckInput>) -> String {
         use crate::shacl::ShaclValidator;
