@@ -65,6 +65,8 @@
 //!
 //! # What this deliberately does not cover
 //!
+//! (Fixed in #92: the tokenizer is hashed into the local arm's revision.
+//! What follows describes the defect that used to exist.)
 //! The **tokenizer**. Swapping `tokenizer.json` while keeping the same `.onnx`
 //! changes the vectors and goes undetected here. It is the same class of defect
 //! and the fix is one more `SourceFingerprint` — left out only to keep this
@@ -117,7 +119,19 @@ pub fn describe(cfg: &EmbeddingsConfig) -> String {
                 .and_then(|p| crate::cache::sha256_file_hex(p).ok())
                 .map(|sha| format!("sha256={sha}"))
                 .unwrap_or_else(|| UNAVAILABLE.to_string());
-            format!("provider=local\nmodel={name}\nrevision={revision}")
+            // The tokenizer is part of the model as far as the vectors are
+            // concerned: swapping tokenizer.json alone changes what every
+            // string embeds to, while the .onnx bytes and therefore the
+            // revision above stay identical. Without this hash the guard
+            // accepts vectors from one tokenizer against queries from
+            // another, which is the same silent mixing of vector spaces the
+            // fingerprint exists to prevent. A tokenizer is a few hundred KB,
+            // so the cost is not measurable beside the model's own hash.
+            let tokenizer = crate::embed::resolve_local_tokenizer_path(cfg)
+                .and_then(|p| crate::cache::sha256_file_hex(&p).ok())
+                .map(|sha| format!("sha256={sha}"))
+                .unwrap_or_else(|| UNAVAILABLE.to_string());
+            format!("provider=local\nmodel={name}\nrevision={revision}\ntokenizer={tokenizer}")
         }
     }
 }
@@ -204,6 +218,36 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn a_different_tokenizer_changes_the_fingerprint() {
+        // The defect this guards: same .onnx, different tokenizer.json, same
+        // fingerprint, so vectors from one tokenizer were accepted against
+        // queries from another.
+        let dir = std::env::temp_dir().join(format!("oo-fp-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let model = dir.join("model.onnx");
+        std::fs::write(&model, b"same model bytes").unwrap();
+        let tok = dir.join("tokenizer.json");
+
+        let cfg = EmbeddingsConfig {
+            provider: Some("local".into()),
+            model_path: Some(model.to_string_lossy().into_owned()),
+            tokenizer_path: Some(tok.to_string_lossy().into_owned()),
+            ..Default::default()
+        };
+
+        std::fs::write(&tok, b"{\"vocab\":\"one\"}").unwrap();
+        let first = fingerprint(&cfg);
+        std::fs::write(&tok, b"{\"vocab\":\"two\"}").unwrap();
+        let second = fingerprint(&cfg);
+
+        std::fs::remove_dir_all(&dir).ok();
+        assert_ne!(
+            first, second,
+            "swapping the tokenizer must change the fingerprint"
+        );
     }
 
     #[test]

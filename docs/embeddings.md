@@ -122,4 +122,4 @@ with a `warn` naming what happened. What to expect:
 - API responses are L2-normalized in-process so cosine scores remain comparable with the local ONNX path.
 - The local and remote paths share the same downstream `onto_embed` / `onto_search` / `onto_similarity` tools — switching providers requires no code changes.
 - See `[embeddings]` block in the default config emitted by `open-ontologies init` (`src/main.rs::DEFAULT_CONFIG`) for the full set of fields with comments.
-- Changing the *tokenizer* alone (same `.onnx`, different `tokenizer.json`) is **not** covered by the fingerprint today — see the note in `src/embed_fingerprint.rs`.
+- Changing the *tokenizer* alone (same `.onnx`, different `tokenizer.json`) **is** covered: its sha256 is folded into the local arm's revision alongside the model's, because a different tokenizer produces different vectors from the same model.

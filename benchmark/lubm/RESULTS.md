@@ -13,11 +13,21 @@ steps are at the bottom; disagreement is welcome and cheap to settle.
 |---|---|---|---|---|---|---|
 | LUBM(1) | 15 | 100,866 | 0.2 s | ~649k triples/s | 0.3 s | +48,583 |
 | LUBM(10) | 189 | 1,273,246 | 2.0 s | ~625k triples/s | 2.9 s | +472,155 |
+| LUBM(100) | 2,007 | **13,409,688** | 25.0 s | ~537k triples/s | 95.0 s | +6,400,920 |
 
-Loading is linear and fast, and materialisation of 1.27M triples in under
-three seconds is respectable for a single node with no tuning. Nothing here
-is a scale claim: LUBM(100) and beyond, and any concurrent workload, remain
-unmeasured.
+Loading stays close to linear across two orders of magnitude, from 649k to
+537k triples per second, so parsing and insertion are not where this engine
+falls over.
+
+Materialisation is where the cost lives, and it is superlinear: 0.3 s at
+100k triples, 2.9 s at 1.3M, 95 s at 13.4M. The fixpoint is recomputed from
+scratch over a growing triple set, which is exactly the case for incremental
+reasoning, and the honest reading of this table is that full
+re-materialisation is comfortable to a few million triples and painful
+beyond it.
+
+A store holding 19.8M triples after inference, single node, no tuning, is
+not a toy. It is also not a claim about billions, which remains unmeasured.
 
 ## The 14 queries, LUBM(1), after `owl-rl-ext` materialisation
 
@@ -74,19 +84,41 @@ conclusion for exactly that reason.
 Use `owl-rl-ext` when the ontology defines classes by restriction, which
 any ontology with genuine OWL semantics will.
 
-## Query latency
+## Query latency, warm store
 
-The per-query timings from the harness are not reported here because they
-are dominated by a measurement artifact: the CLI is stateless, so the
-harness reloads and re-materialises the dataset for every query, and each
-measurement is therefore ~190 ms of setup around a query that returns in
-well under a millisecond. The unreasoned run, where no materialisation
-happens, shows queries completing in 0.0 to 2.4 ms.
+`query_latency.py` loads once over HTTP, materialises, warms each query,
+then times 25 runs. Median and p95 are reported rather than a mean, because
+the tail is what a caller feels. LUBM(1), 149,449 triples after inference.
 
-Measuring query latency properly needs the HTTP server with a warm store,
-and concurrent-client throughput needs a load generator. Both are worth
-doing before any performance claim is made against a commercial store, and
-neither has been done.
+| Query | Results | Median | p95 |
+|---|---|---|---|
+| Q1 | 4 | 1.09 ms | 1.15 ms |
+| Q2 | 0 | 13.97 ms | 14.93 ms |
+| Q3 | 6 | 2.02 ms | 2.06 ms |
+| Q4 | 34 | 0.85 ms | 0.91 ms |
+| Q5 | 719 | 8.82 ms | 11.75 ms |
+| Q6 | 7,790 | 8.04 ms | 9.02 ms |
+| Q7 | 67 | 0.44 ms | 0.50 ms |
+| Q8 | 7,790 | 56.25 ms | 60.95 ms |
+| Q9 | 208 | 19.95 ms | 29.71 ms |
+| Q10 | 4 | 2.84 ms | 3.10 ms |
+| Q11 | 224 | 0.55 ms | 0.60 ms |
+| Q12 | 15 | 0.36 ms | 0.42 ms |
+| Q13 | 1 | 0.23 ms | 0.24 ms |
+| Q14 | 5,916 | 5.71 ms | 6.46 ms |
+
+Ten of the fourteen answer in under 10 ms and half in under a millisecond.
+The two expensive ones are the shape to note: Q8 (56 ms) and Q9 (20 ms) are
+multi-join queries over large intermediate results, and they are where a
+mature query planner earns its keep. That is a fair place to expect a
+commercial store to beat this one.
+
+### Throughput
+
+Eight concurrent clients cycling the full 14-query mix, five seconds:
+**124 queries/s**. The mix includes Q8 and Q9, so this is a deliberately
+unflattering number: a realistic workload weighted toward the cheap queries
+would be far higher. Reported as measured rather than as a best case.
 
 ## What benchmarking already fixed
 
@@ -115,12 +147,15 @@ java -cp classes edu.lehigh.swat.bench.uba.Generator \
 
 # 3. run
 python3 run_lubm.py --data data1 --reason --profile owl-rl-ext --runs 3 --out results-lubm1.json
+
+# 4. warm-store latency and throughput
+python3 query_latency.py --data data1 --runs 25 --clients 8 --seconds 5
 ```
 
 ## Not yet measured
 
-- LUBM(100) and LUBM(1000): where the single-node ceiling actually is
-- Query latency with a warm store, and throughput under concurrency
+- LUBM(1000) and beyond: 13.4M triples is measured, billions are not
+- Incremental reasoning: the 95 s materialisation at LUBM(100) is the case for it
 - BSBM, SP2Bench, WatDiv: query optimisation under other shapes
 - Any comparison against another store on the same hardware
 
