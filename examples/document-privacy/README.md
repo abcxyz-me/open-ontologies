@@ -50,3 +50,18 @@ chunks = chunk_document(text, doc_id="DOC-042")
 for group in pack(chunks):            # packs to a context budget
     prompt_part = render(group)
 ```
+
+## provenance.py: light up the Studio's 3D document map
+
+The Studio's 3D view has two projections. With no provenance in the store it
+draws the ontology itself (classes, hierarchy, instances). With
+`?entity prov:wasDerivedFrom ?document` triples present it draws the far more
+interesting one: documents as hubs, entities as bridges between them, and any
+entity typed into disjoint classes by different documents as a red knot
+between the documents that disagree.
+
+```python
+from provenance import emit_provenance
+tail = emit_provenance({"SOP-201": ttl_1, "REF-601": ttl_2})
+# append to the merged store before loading
+```
