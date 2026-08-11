@@ -73,8 +73,53 @@ model    = "nomic-embed-text"
 # api_key is unnecessary for local Ollama
 ```
 
+## Changing the model or provider
+
+**Stored vectors are only comparable against queries from the same
+configuration.** Two models of the same dimension produce numbers of the same
+shape and no shared meaning, so mixing them does not fail — retrieval quality
+just quietly drops.
+
+Every stored vector and every cached HNSW index therefore carries `model_fp`, a
+composite hash of `(provider, model, revision)`:
+
+| provider | `model` | `revision` |
+|---|---|---|
+| `local` | model file name | sha256 of the **whole file** |
+| `openai`-compatible | resolved model name, plus `api_base` and `dimensions` | none — the API exposes no revision |
+
+The fingerprint describes the **effective** configuration, so an environment
+override (`OPEN_ONTOLOGIES_EMBEDDINGS_MODEL`, …) counts as a change. For the
+local provider it hashes the file *contents*: replacing the `.onnx` in place
+leaves the path and filename identical, and that is the most likely way a local
+model gets swapped.
+
+The whole file, not a head prefix — two fine-tunes of one architecture have
+identical sizes and identical ONNX graph protos, and `cp -p` preserves mtime, so
+`(size, mtime, head)` cannot tell them apart. Cost, measured on the 470 MB
+default model: **1.4 s**, once per process, and only when the local provider is
+in use — against a model load that already reads and optimises the same file.
+
+On a mismatch, the affected vectors and index caches are discarded and rebuilt,
+with a `warn` naming what happened. What to expect:
+
+- **After changing `[embeddings] model`, `provider`, `api_base` or
+  `dimensions`** — everything must be re-embedded. Discarding is not optional:
+  the old vectors cannot be compared against new queries.
+- **The first start after upgrading** to a build that has this column — vectors
+  written earlier carry no fingerprint. Nothing recorded which model produced
+  them, and assuming it was the current one is the failure this prevents, so
+  they are discarded once. Re-embed and it does not recur.
+- **No change** — nothing is discarded and cached indices are reused, exactly as
+  before.
+
+`entries_hash` is unchanged and still checked. It catches a changed entry set;
+`model_fp` catches an unchanged entry set queried by a different model — which
+`entries_hash` structurally cannot see, since the stored bytes are identical.
+
 ### Notes
 
 - API responses are L2-normalized in-process so cosine scores remain comparable with the local ONNX path.
 - The local and remote paths share the same downstream `onto_embed` / `onto_search` / `onto_similarity` tools — switching providers requires no code changes.
 - See `[embeddings]` block in the default config emitted by `open-ontologies init` (`src/main.rs::DEFAULT_CONFIG`) for the full set of fields with comments.
+- Changing the *tokenizer* alone (same `.onnx`, different `tokenizer.json`) is **not** covered by the fingerprint today — see the note in `src/embed_fingerprint.rs`.

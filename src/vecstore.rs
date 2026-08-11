@@ -26,6 +26,16 @@ pub struct VecStore {
     /// search. Same invalidation semantics as `cosine_index`. The existing
     /// brute-force `search_poincare` is unchanged.
     poincare_index: Option<PoincareIndex>,
+    /// Fingerprint of the embedding configuration producing the vectors in this
+    /// store — see `crate::embed_fingerprint`. Written alongside every vector
+    /// and every cached index, and compared on load.
+    ///
+    /// `None` means "this store was built without knowing the configuration".
+    /// That is the case for unit tests, which construct a `VecStore` with no
+    /// `EmbeddingsConfig` in reach; the server always sets it. When it is
+    /// `None` the fingerprint checks are skipped entirely, so an unconfigured
+    /// store behaves exactly as it did before this column existed.
+    embeddings_fp: Option<String>,
 }
 
 impl VecStore {
@@ -35,6 +45,40 @@ impl VecStore {
             entries: HashMap::new(),
             cosine_index: None,
             poincare_index: None,
+            embeddings_fp: None,
+        }
+    }
+
+    /// Record which embedding configuration produced (and will produce) the
+    /// vectors in this store.
+    ///
+    /// Set it before `load_from_db`: the load path is where a mismatch is
+    /// detected, and detecting it afterwards would mean the stale vectors are
+    /// already in memory and about to be searched.
+    pub fn with_embeddings_fingerprint(mut self, fp: String) -> Self {
+        self.embeddings_fp = Some(fp);
+        self
+    }
+
+    /// The configuration fingerprint, if this store knows it.
+    pub fn embeddings_fingerprint(&self) -> Option<&str> {
+        self.embeddings_fp.as_deref()
+    }
+
+    /// Whether a fingerprint read back from the database describes the same
+    /// configuration this store is running.
+    ///
+    /// Three-way on purpose, and the stored-`None` case is the interesting one:
+    /// a row written before this column existed carries no answer, and treating
+    /// unknown as matching would let exactly the corruption this guards against
+    /// survive an upgrade. So unknown counts as a mismatch — one loud rebuild
+    /// the first time a pre-upgrade database is opened.
+    fn fingerprint_matches(&self, stored: Option<&str>) -> bool {
+        match (self.embeddings_fp.as_deref(), stored) {
+            // Store has no configuration to compare against: behave as before.
+            (None, _) => true,
+            (Some(current), Some(found)) => current == found,
+            (Some(_), None) => false,
         }
     }
 
@@ -240,9 +284,9 @@ impl VecStore {
         let count = self.entries.len() as i64;
         let conn = self.db.conn();
         conn.execute(
-            "INSERT OR REPLACE INTO hnsw_index_cache (kind, entries_hash, entry_count, serialised) \
-             VALUES ('cosine', ?1, ?2, ?3)",
-            rusqlite::params![fp, count, bytes],
+            "INSERT OR REPLACE INTO hnsw_index_cache (kind, entries_hash, entry_count, serialised, model_fp) \
+             VALUES ('cosine', ?1, ?2, ?3, ?4)",
+            rusqlite::params![fp, count, bytes, self.embeddings_fp],
         )?;
         Ok(())
     }
@@ -254,17 +298,35 @@ impl VecStore {
     /// is a no-op and the next `search_cosine_hnsw` rebuilds normally.
     pub fn load_cosine_index(&mut self) -> anyhow::Result<bool> {
         let conn = self.db.conn();
-        let row: Option<(Vec<u8>, Vec<u8>)> = conn
+        let row: Option<(Vec<u8>, Vec<u8>, Option<String>)> = conn
             .query_row(
-                "SELECT entries_hash, serialised FROM hnsw_index_cache WHERE kind = 'cosine'",
+                "SELECT entries_hash, serialised, model_fp FROM hnsw_index_cache WHERE kind = 'cosine'",
                 [],
-                |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, Vec<u8>>(1)?)),
+                |row| {
+                    Ok((
+                        row.get::<_, Vec<u8>>(0)?,
+                        row.get::<_, Vec<u8>>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                    ))
+                },
             )
             .ok();
-        let (stored_hash, bytes) = match row {
+        let (stored_hash, bytes, stored_fp) = match row {
             Some(x) => x,
             None => return Ok(false),
         };
+        // Two independent checks, neither sufficient alone. `entries_hash`
+        // catches a changed entry set; `model_fp` catches an unchanged entry
+        // set that a different model now queries against — which
+        // `entries_hash` structurally cannot see, the stored bytes being
+        // identical.
+        if !self.fingerprint_matches(stored_fp.as_deref()) {
+            tracing::warn!(
+                "cached cosine HNSW index was built under a different embedding configuration \
+                 — discarding it and rebuilding. One-off cost per configuration change."
+            );
+            return Ok(false);
+        }
         let current_hash = self.entries_fingerprint();
         if stored_hash != current_hash {
             // Stale — let the rebuild path handle it next time.
@@ -306,12 +368,13 @@ impl VecStore {
         let fp = self.entries_fingerprint();
         let count = self.entries.len() as i64;
         let db = self.db.clone();
+        let model_fp = self.embeddings_fp.clone();
         let handle = tokio::task::spawn_blocking(move || {
             let conn = db.conn();
             conn.execute(
-                "INSERT OR REPLACE INTO hnsw_index_cache (kind, entries_hash, entry_count, serialised) \
-                 VALUES ('cosine', ?1, ?2, ?3)",
-                rusqlite::params![fp, count, bytes],
+                "INSERT OR REPLACE INTO hnsw_index_cache (kind, entries_hash, entry_count, serialised, model_fp) \
+                 VALUES ('cosine', ?1, ?2, ?3, ?4)",
+                rusqlite::params![fp, count, bytes, model_fp],
             )?;
             Ok::<(), anyhow::Error>(())
         });
@@ -342,12 +405,13 @@ impl VecStore {
         let fp = self.entries_fingerprint();
         let count = self.entries.len() as i64;
         let db = self.db.clone();
+        let model_fp = self.embeddings_fp.clone();
         let handle = tokio::task::spawn_blocking(move || {
             let conn = db.conn();
             conn.execute(
-                "INSERT OR REPLACE INTO hnsw_index_cache (kind, entries_hash, entry_count, serialised) \
-                 VALUES ('poincare', ?1, ?2, ?3)",
-                rusqlite::params![fp, count, bytes],
+                "INSERT OR REPLACE INTO hnsw_index_cache (kind, entries_hash, entry_count, serialised, model_fp) \
+                 VALUES ('poincare', ?1, ?2, ?3, ?4)",
+                rusqlite::params![fp, count, bytes, model_fp],
             )?;
             Ok::<(), anyhow::Error>(())
         });
@@ -378,9 +442,9 @@ impl VecStore {
         let count = self.entries.len() as i64;
         let conn = self.db.conn();
         conn.execute(
-            "INSERT OR REPLACE INTO hnsw_index_cache (kind, entries_hash, entry_count, serialised) \
-             VALUES ('poincare', ?1, ?2, ?3)",
-            rusqlite::params![fp, count, bytes],
+            "INSERT OR REPLACE INTO hnsw_index_cache (kind, entries_hash, entry_count, serialised, model_fp) \
+             VALUES ('poincare', ?1, ?2, ?3, ?4)",
+            rusqlite::params![fp, count, bytes, self.embeddings_fp],
         )?;
         Ok(())
     }
@@ -389,17 +453,35 @@ impl VecStore {
     /// [`Self::load_cosine_index`].
     pub fn load_poincare_index(&mut self) -> anyhow::Result<bool> {
         let conn = self.db.conn();
-        let row: Option<(Vec<u8>, Vec<u8>)> = conn
+        let row: Option<(Vec<u8>, Vec<u8>, Option<String>)> = conn
             .query_row(
-                "SELECT entries_hash, serialised FROM hnsw_index_cache WHERE kind = 'poincare'",
+                "SELECT entries_hash, serialised, model_fp FROM hnsw_index_cache WHERE kind = 'poincare'",
                 [],
-                |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, Vec<u8>>(1)?)),
+                |row| {
+                    Ok((
+                        row.get::<_, Vec<u8>>(0)?,
+                        row.get::<_, Vec<u8>>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                    ))
+                },
             )
             .ok();
-        let (stored_hash, bytes) = match row {
+        let (stored_hash, bytes, stored_fp) = match row {
             Some(x) => x,
             None => return Ok(false),
         };
+        // Two independent checks, neither sufficient alone. `entries_hash`
+        // catches a changed entry set; `model_fp` catches an unchanged entry
+        // set that a different model now queries against — which
+        // `entries_hash` structurally cannot see, the stored bytes being
+        // identical.
+        if !self.fingerprint_matches(stored_fp.as_deref()) {
+            tracing::warn!(
+                "cached poincare HNSW index was built under a different embedding configuration \
+                 — discarding it and rebuilding. One-off cost per configuration change."
+            );
+            return Ok(false);
+        }
         let current_hash = self.entries_fingerprint();
         if stored_hash != current_hash {
             return Ok(false);
@@ -414,7 +496,7 @@ impl VecStore {
         tx.execute("DELETE FROM embeddings", [])?;
         {
             let mut stmt = tx.prepare(
-                "INSERT INTO embeddings (iri, text_vec, struct_vec, text_dim, struct_dim) VALUES (?1, ?2, ?3, ?4, ?5)"
+                "INSERT INTO embeddings (iri, text_vec, struct_vec, text_dim, struct_dim, model_fp) VALUES (?1, ?2, ?3, ?4, ?5, ?6)"
             )?;
             for (iri, entry) in &self.entries {
                 let text_bytes = f32_slice_to_bytes(&entry.text_vec);
@@ -425,6 +507,7 @@ impl VecStore {
                     struct_bytes,
                     entry.text_vec.len() as i64,
                     entry.struct_vec.len() as i64,
+                    self.embeddings_fp,
                 ])?;
             }
         }
@@ -435,23 +518,59 @@ impl VecStore {
     pub fn load_from_db(&mut self) -> anyhow::Result<()> {
         // Scope the connection + statement so the conn MutexGuard is dropped
         // before we call `load_cosine_index` (which re-acquires it).
+        let mut rejected_known = 0usize;
+        let mut rejected_unknown = 0usize;
         {
             let conn = self.db.conn();
-            let mut stmt = conn.prepare("SELECT iri, text_vec, struct_vec FROM embeddings")?;
+            let mut stmt =
+                conn.prepare("SELECT iri, text_vec, struct_vec, model_fp FROM embeddings")?;
             let rows = stmt.query_map([], |row| {
                 let iri: String = row.get(0)?;
                 let text_bytes: Vec<u8> = row.get(1)?;
                 let struct_bytes: Vec<u8> = row.get(2)?;
-                Ok((iri, text_bytes, struct_bytes))
+                let model_fp: Option<String> = row.get(3)?;
+                Ok((iri, text_bytes, struct_bytes, model_fp))
             })?;
 
             for row in rows {
-                let (iri, text_bytes, struct_bytes) = row?;
+                let (iri, text_bytes, struct_bytes, model_fp) = row?;
+                // Drop rather than load. A vector produced by a different model
+                // is not merely stale, it is meaningless against the current
+                // query space — keeping it would preserve exactly the silent
+                // relevance regression this column exists to end.
+                if !self.fingerprint_matches(model_fp.as_deref()) {
+                    if model_fp.is_none() {
+                        rejected_unknown += 1;
+                    } else {
+                        rejected_known += 1;
+                    }
+                    continue;
+                }
                 self.entries.insert(iri, VecEntry {
                     text_vec: bytes_to_f32_vec(&text_bytes),
                     struct_vec: bytes_to_f32_vec(&struct_bytes),
                 });
             }
+        }
+
+        // Loud on purpose. A silent rebuild fixes the correctness problem and
+        // leaves the operator wondering why the first query after a restart
+        // took 40 seconds.
+        if rejected_known > 0 {
+            tracing::warn!(
+                "discarded {rejected_known} embedding(s) produced by a different embedding \
+                 configuration — they cannot be compared against queries from the current one. \
+                 Re-embed to restore them. Current configuration: {}",
+                self.embeddings_fp.as_deref().unwrap_or("<unset>")
+            );
+        }
+        if rejected_unknown > 0 {
+            tracing::warn!(
+                "discarded {rejected_unknown} embedding(s) with no recorded model fingerprint \
+                 (written before the fingerprint column existed). They may well have come from \
+                 the current model, but nothing recorded which, and assuming they did is the \
+                 failure this check exists to prevent. Re-embed once and this will not recur."
+            );
         }
         // Invalidate any previously-built HNSW indices; try to load persisted
         // ones. If the persisted fingerprint matches the entries we just loaded,

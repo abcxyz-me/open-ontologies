@@ -199,3 +199,56 @@ fn a_genuine_open_failure_is_an_error_not_a_silent_pass() {
         "opening a non-database must return Err, not succeed silently"
     );
 }
+
+/// Migration 3: the embedding model fingerprint columns.
+///
+/// The fixture is a hand-written v2 database — the DDL was copied from the
+/// schema as it stood, not generated from the current `SCHEMA` constant, for
+/// the reason in this file's header.
+#[test]
+fn adds_the_model_fingerprint_columns_and_keeps_the_rows() {
+    let (_dir, path) = staged("v2-pre-model-fp.db");
+
+    {
+        let raw = Connection::open(&path).unwrap();
+        let v: i64 = raw.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
+        assert_eq!(v, 2, "fixture should start at user_version 2");
+        assert!(
+            !columns(&raw, "embeddings").contains(&"model_fp".to_string()),
+            "fixture should predate the column"
+        );
+        assert!(!columns(&raw, "hnsw_index_cache").contains(&"model_fp".to_string()));
+    }
+
+    let db = StateDb::open(&path).unwrap();
+    assert_eq!(db.schema_version().unwrap(), SCHEMA_VERSION);
+
+    let conn = db.conn();
+    assert!(columns(&conn, "embeddings").contains(&"model_fp".to_string()));
+    assert!(columns(&conn, "hnsw_index_cache").contains(&"model_fp".to_string()));
+
+    // The vectors survive, and their fingerprint is NULL rather than
+    // back-filled with a guess. NULL is the honest answer — nothing recorded
+    // which model produced them — and it is what makes the load path reject
+    // them once instead of trusting them forever.
+    let (iri, fp): (String, Option<String>) = conn
+        .query_row(
+            "SELECT iri, model_fp FROM embeddings WHERE iri = 'http://ex.org/Legacy'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(iri, "http://ex.org/Legacy");
+    assert_eq!(fp, None);
+
+    let (kind, count, fp): (String, i64, Option<String>) = conn
+        .query_row(
+            "SELECT kind, entry_count, model_fp FROM hnsw_index_cache WHERE kind = 'cosine'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(kind, "cosine");
+    assert_eq!(count, 1);
+    assert_eq!(fp, None);
+}
