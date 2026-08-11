@@ -1149,3 +1149,21 @@ pub struct OntoReasonIncrementalInput {
     /// Write the inferences into the store (default true)
     pub materialize: Option<bool>,
 }
+
+#[derive(Deserialize, JsonSchema)]
+pub struct OntoTemporalSnapshotInput {
+    /// Instant to evaluate validity at, e.g. "2026-03-01". Omit for any time.
+    pub valid_at: Option<String>,
+    /// Only consider what was recorded by this instant. Omit for everything known.
+    pub as_of: Option<String>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+pub struct OntoTemporalQueryInput {
+    /// SPARQL graph pattern, the body of a WHERE clause
+    pub pattern: String,
+    /// Instant to evaluate validity at
+    pub valid_at: Option<String>,
+    /// Only consider what was recorded by this instant
+    pub as_of: Option<String>,
+}

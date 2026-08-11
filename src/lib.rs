@@ -25,6 +25,7 @@ pub mod extract_scaffold;
 pub mod flora_pipeline;
 pub mod pack;
 pub mod support;
+pub mod temporal;
 pub mod policy;
 pub mod projection_check;
 pub mod shape_combinatorics;

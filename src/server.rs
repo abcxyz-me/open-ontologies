@@ -885,6 +885,35 @@ impl OpenOntologiesServer {
         }
     }
 
+    #[tool(name = "onto_temporal_snapshot", description = "Which named graphs are in scope at a point in time, and which are excluded and why. Two independent clocks: valid_at asks what was TRUE then, as_of asks what was KNOWN then. Assertions live in named graphs described in the default graph with temporal:validFrom, validTo and recordedAt; a graph with no description is timeless and always in scope.")]
+    async fn onto_temporal_snapshot(&self, Parameters(input): Parameters<OntoTemporalSnapshotInput>) -> String {
+        use crate::temporal::Temporal;
+        match Temporal::new(self.graph.clone()).snapshot(input.valid_at.as_deref(), input.as_of.as_deref()) {
+            Ok(json) => json,
+            Err(e) => format!(r#"{{"error":"{}"}}"#, e.to_string().replace('"', "'")),
+        }
+    }
+
+    #[tool(name = "onto_temporal_query", description = "Run a SPARQL graph pattern against only the graphs in temporal scope: what the graph said at a given valid time, as known at a given recorded time. Pass the body of a WHERE clause as `pattern`.")]
+    async fn onto_temporal_query(&self, Parameters(input): Parameters<OntoTemporalQueryInput>) -> String {
+        use crate::temporal::Temporal;
+        match Temporal::new(self.graph.clone()).query_at(
+            &input.pattern, input.valid_at.as_deref(), input.as_of.as_deref(),
+        ) {
+            Ok(json) => json,
+            Err(e) => format!(r#"{{"error":"{}"}}"#, e.to_string().replace('"', "'")),
+        }
+    }
+
+    #[tool(name = "onto_temporal_conflicts", description = "Disjointness violations that claim OVERLAPPING validity, separated from those that do not. Without valid time a correction reads as a contradiction: an entity recorded one way until May and another after trips every check. This reports genuine disagreement about the same period as contradictions, and everything else as superseded history.")]
+    async fn onto_temporal_conflicts(&self) -> String {
+        use crate::temporal::Temporal;
+        match Temporal::new(self.graph.clone()).conflicts() {
+            Ok(json) => json,
+            Err(e) => format!(r#"{{"error":"{}"}}"#, e.to_string().replace('"', "'")),
+        }
+    }
+
     #[tool(name = "onto_reason_incremental", description = "Derive the consequences of newly added triples WITHOUT recomputing the whole closure. Pass the added triples as N-Triples in `delta`; the engine joins them against the existing closure (semi-naive evaluation), so the work is proportional to what changed rather than to the size of the store. Use after adding facts to an already-materialised graph. Adding SCHEMA axioms (subClassOf, domain, range, inverseOf, equivalentClass) changes what the whole store entails and is refused with an explanation: run onto_reason for those.")]
     async fn onto_reason_incremental(&self, Parameters(input): Parameters<OntoReasonIncrementalInput>) -> String {
         use crate::reason_incremental::{parse_ntriples, IncrementalReasoner};
