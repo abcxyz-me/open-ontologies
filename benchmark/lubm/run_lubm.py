@@ -111,7 +111,8 @@ def main() -> int:
     ap.add_argument("--data", default="data1", help="directory of generated .owl files")
     ap.add_argument("--binary", default="../../target/release/open-ontologies")
     ap.add_argument("--ontology", default="univ-bench.owl")
-    ap.add_argument("--reason", action="store_true", help="materialise OWL-RL before querying")
+    ap.add_argument("--reason", action="store_true", help="materialise before querying")
+    ap.add_argument("--profile", default="owl-rl-ext", help="rdfs | owl-rl | owl-rl-ext")
     ap.add_argument("--runs", type=int, default=3, help="runs per query, best taken")
     ap.add_argument("--out", default=None, help="write results as JSON")
     args = ap.parse_args()
@@ -137,12 +138,12 @@ def main() -> int:
     inferred = None
     if args.reason:
         t0 = time.time()
-        r = batch(args.binary, loads + ["reason owl-rl", "stats"])
+        r = batch(args.binary, loads + [f"reason {args.profile}", "stats"])
         reason_seconds = time.time() - t0 - load_seconds
         after = next((x["result"] for x in r if x.get("command") == "stats"), {})
         inferred = after.get("triples", 0) - triples
-        print(f"  reason (owl-rl): {reason_seconds:.1f}s, +{inferred} inferred triples")
-        loads = loads + ["reason owl-rl"]
+        print(f"  reason ({args.profile}): {reason_seconds:.1f}s, +{inferred} inferred triples")
+        loads = loads + [f"reason {args.profile}"]
 
     rows = []
     for name, query, needs_inference in QUERIES:
@@ -171,6 +172,7 @@ def main() -> int:
         "triples": triples,
         "load_seconds": round(load_seconds, 2),
         "reasoned": bool(args.reason),
+        "profile": args.profile if args.reason else None,
         "reason_seconds": round(reason_seconds, 2) if reason_seconds else None,
         "inferred_triples": inferred,
         "runs_per_query": args.runs,

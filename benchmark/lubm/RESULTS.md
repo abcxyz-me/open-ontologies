@@ -9,9 +9,9 @@ steps are at the bottom; disagreement is welcome and cheap to settle.
 
 ## Load and materialisation
 
-| Dataset | Files | Triples | Load | Rate | OWL-RL | Inferred |
+| Dataset | Files | Triples | Load | Rate | `owl-rl-ext` | Inferred |
 |---|---|---|---|---|---|---|
-| LUBM(1) | 15 | 100,866 | 0.2 s | ~649k triples/s | 0.2 s | +37,942 |
+| LUBM(1) | 15 | 100,866 | 0.2 s | ~649k triples/s | 0.3 s | +48,583 |
 | LUBM(10) | 189 | 1,273,246 | 2.0 s | ~625k triples/s | 2.9 s | +472,155 |
 
 Loading is linear and fast, and materialisation of 1.27M triples in under
@@ -19,47 +19,60 @@ three seconds is respectable for a single node with no tuning. Nothing here
 is a scale claim: LUBM(100) and beyond, and any concurrent workload, remain
 unmeasured.
 
-## The 14 queries, LUBM(1), after OWL-RL materialisation
+## The 14 queries, LUBM(1), after `owl-rl-ext` materialisation
 
 `expected` is the published answer count for LUBM(1) under complete OWL
 inference.
 
-| Query | Expected | Ours | Complete | Note |
-|---|---|---|---|---|
-| Q1 | 4 | 4 | yes | |
-| Q2 | 0 | 0 | yes | genuinely empty at LUBM(1), one university |
-| Q3 | 6 | 6 | yes | |
-| Q4 | 34 | 34 | yes | subclass and property inference |
-| Q5 | 719 | 719 | yes | `memberOf` subproperty inference |
-| Q6 | 7,790 | 5,916 | **no** | needs `Student` definition |
-| Q7 | 67 | 59 | **no** | needs `Student` definition |
-| Q8 | 7,790 | 5,916 | **no** | needs `Student` definition |
-| Q9 | 208 | 103 | **no** | needs `Student` definition |
-| Q10 | 4 | 0 | **no** | needs `Student` definition |
-| Q11 | 224 | 224 | yes | transitive `subOrganizationOf` |
-| Q12 | 15 | 0 | **no** | needs `Chair` definition |
-| Q13 | 1 | 1 | yes | inverse property (`hasAlumnus`) |
-| Q14 | 5,916 | 5,916 | yes | |
+| Query | Expected | Ours | |
+|---|---|---|---|
+| Q1 | 4 | 4 | correct |
+| Q2 | 0 | 0 | correct (genuinely empty at LUBM(1), one university) |
+| Q3 | 6 | 6 | correct |
+| Q4 | 34 | 34 | correct |
+| Q5 | 719 | 719 | correct |
+| Q6 | 7,790 | 7,790 | correct |
+| Q7 | 67 | 67 | correct |
+| Q8 | 7,790 | 7,790 | correct |
+| Q9 | 208 | 208 | correct |
+| Q10 | 4 | 4 | correct |
+| Q11 | 224 | 224 | correct |
+| Q12 | 15 | 15 | correct |
+| Q13 | 1 | 1 | correct |
+| Q14 | 5,916 | 5,916 | correct |
 
-**8 of 14 complete. The 6 incomplete answers share one cause.**
+**14 of 14 complete**, in 0.3 s of materialisation over 100,866 triples
+(+48,583 inferred).
 
-LUBM defines two classes by equivalence to a restriction:
+### The profile matters, and choosing it wrongly looks like a reasoner gap
+
+The first run of this suite used `owl-rl` and returned **8 of 14**. Six
+queries came back incomplete, and they shared a cause: LUBM defines two
+classes by equivalence to an existential restriction,
 
 ```
 Student ≡ Person ⊓ ∃takesCourse.Course
 Chair   ≡ Person ⊓ ∃headOf.Department
 ```
 
-Recognising a `GraduateStudent` as a `Student` therefore requires reasoning
-over an existential restriction on the *left* of an equivalence, which is
-OWL 2 DL and outside the OWL-RL profile the materialiser implements. Every
-incomplete row above is that single missing capability, not six separate
-gaps: Q6, Q7, Q8, Q9 and Q10 all need `Student`, and Q12 needs `Chair`.
+and recognising a `GraduateStudent` as a `Student` therefore needs
+reasoning over `someValuesFrom`, which is outside the OWL-RL profile.
 
-This is the honest statement of where the reasoner stands. It is a bounded,
-nameable gap rather than a vague one, and closing it is a known piece of
-work: recognise `C ≡ D ⊓ ∃P.E` definitions and add the corresponding
-instance-recognition rule during materialisation.
+That is a real limit of `owl-rl`, and it is not a limit of the engine:
+`owl-rl-ext` implements `someValuesFrom`, `allValuesFrom`, `hasValue`,
+intersection and union, and returns all 14 exactly. The lesson worth
+recording is about measurement rather than reasoning. An incomplete answer
+set looks identical whether the reasoner cannot do the work or was simply
+not asked to, and the first version of this file published the wrong
+conclusion for exactly that reason.
+
+| Profile | Q6 | Q12 | Inferred | Time |
+|---|---|---|---|---|
+| `owl-rl` | 5,916 | 0 | +37,942 | 0.2 s |
+| `owl-rl-ext` | 7,790 | 15 | +48,583 | 0.3 s |
+
+Use `owl-rl-ext` when the ontology defines classes by restriction, which
+any ontology with genuine OWL semantics will.
 
 ## Query latency
 
@@ -101,7 +114,7 @@ java -cp classes edu.lehigh.swat.bench.uba.Generator \
      -onto http://swat.cse.lehigh.edu/onto/univ-bench.owl
 
 # 3. run
-python3 run_lubm.py --data data1 --reason --runs 3 --out results-lubm1.json
+python3 run_lubm.py --data data1 --reason --profile owl-rl-ext --runs 3 --out results-lubm1.json
 ```
 
 ## Not yet measured
