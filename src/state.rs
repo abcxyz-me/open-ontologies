@@ -135,6 +135,7 @@ CREATE TABLE IF NOT EXISTS ontology_cache (
 CREATE TABLE IF NOT EXISTS plans (
     seq INTEGER PRIMARY KEY AUTOINCREMENT,
     plan_id TEXT NOT NULL UNIQUE,
+    owner TEXT NOT NULL DEFAULT 'cli',
     new_turtle TEXT NOT NULL,
     added_classes TEXT NOT NULL,
     removed_classes TEXT NOT NULL,
@@ -245,6 +246,27 @@ fn column_exists(conn: &Connection, table: &str, column: &str) -> Result<bool> {
     Ok(false)
 }
 
+/// Add `plans.owner` to a database created before the column existed.
+///
+/// Not a [`MIGRATIONS`] entry, by that list's own rule: it exists for *columns
+/// added to tables that already shipped*, and `plans` has never appeared in a
+/// release — it was added and then given an owner within the same unreleased
+/// window. Taking a schema version for it would cost every in-flight branch a
+/// renumber and every field database a version bump, to repair a table that
+/// only exists on `main`. The `CREATE TABLE IF NOT EXISTS` in [`SCHEMA`]
+/// handles every other case.
+///
+/// Adding the column rather than recreating the table keeps any plan already
+/// computed against `main` usable, under the default owner.
+fn add_plan_owner_column(conn: &Connection) -> Result<()> {
+    if column_exists(conn, "plans", "owner")? {
+        return Ok(());
+    }
+    conn.execute_batch("ALTER TABLE plans ADD COLUMN owner TEXT NOT NULL DEFAULT 'cli'")
+        .map_err(|e| anyhow::anyhow!("failed adding plans.owner: {e}"))?;
+    Ok(())
+}
+
 /// Bring the schema up to [`SCHEMA_VERSION`], recording progress in
 /// `PRAGMA user_version`.
 ///
@@ -305,6 +327,7 @@ impl StateDb {
         conn.pragma_update(None, "synchronous", "NORMAL")?;
         conn.execute_batch(SCHEMA)?;
         conn.execute_batch(BUFFER_SCHEMA)?;
+        add_plan_owner_column(&conn)?;
         run_migrations(&mut conn)?;
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),

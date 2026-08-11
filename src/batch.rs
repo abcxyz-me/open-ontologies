@@ -17,6 +17,7 @@ pub struct BatchRunner {
 }
 
 /// A parsed batch command with its arguments.
+#[derive(Debug)]
 struct BatchCmd {
     name: String,
     args: Vec<String>,
@@ -501,6 +502,63 @@ fn parse_json(input: &str) -> Result<Vec<BatchCmd>, String> {
     Ok(cmds)
 }
 
+/// Split a batch line into a command and its arguments.
+///
+/// Deliberately not `shell_words::split`. POSIX escaping treats `\` as an
+/// escape character everywhere, which silently consumed every separator in a
+/// Windows path: `plan C:\onto\proposed.ttl` arrived as `C:ontoproposed.ttl`,
+/// the file was never found, and the failure surfaced somewhere else entirely
+/// — `apply` reporting "No plan found" because the `plan` before it could not
+/// read its input.
+///
+/// In a batch file a backslash is a path separator far more often than an
+/// escape, so here it is literal outside quotes, and an escape only inside
+/// double quotes and only before `"` or `\`. Single quotes are literal
+/// throughout. Quoting still groups arguments containing spaces.
+fn split_command_line(line: &str) -> Result<Vec<String>, String> {
+    let mut words = Vec::new();
+    let mut word = String::new();
+    let mut started = false;
+    let mut chars = line.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        if c.is_whitespace() {
+            if started {
+                words.push(std::mem::take(&mut word));
+                started = false;
+            }
+            continue;
+        }
+        started = true;
+        match c {
+            '\'' => loop {
+                match chars.next() {
+                    Some('\'') => break,
+                    Some(c) => word.push(c),
+                    None => return Err("unterminated single quote".to_string()),
+                }
+            },
+            '"' => loop {
+                match chars.next() {
+                    Some('"') => break,
+                    Some('\\') => match chars.peek() {
+                        Some('"') | Some('\\') => word.push(chars.next().unwrap()),
+                        _ => word.push('\\'),
+                    },
+                    Some(c) => word.push(c),
+                    None => return Err("unterminated double quote".to_string()),
+                }
+            },
+            c => word.push(c),
+        }
+    }
+
+    if started {
+        words.push(word);
+    }
+    Ok(words)
+}
+
 fn parse_lines(input: &str) -> Result<Vec<BatchCmd>, String> {
     let mut cmds = Vec::new();
     for line in input.lines() {
@@ -508,7 +566,7 @@ fn parse_lines(input: &str) -> Result<Vec<BatchCmd>, String> {
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
-        let words = shell_words::split(line)
+        let words = split_command_line(line)
             .map_err(|e| format!("bad quoting on line '{}': {}", line, e))?;
         if words.is_empty() {
             continue;
@@ -544,6 +602,49 @@ query "SELECT (COUNT(*) AS ?c) WHERE { ?s ?p ?o }"
         assert_eq!(cmds[2].args, vec!["--profile", "owl-rl"]);
         assert_eq!(cmds[3].name, "query");
         assert_eq!(cmds[3].args[0], "SELECT (COUNT(*) AS ?c) WHERE { ?s ?p ?o }");
+    }
+
+    #[test]
+    fn a_windows_absolute_path_keeps_its_separators() {
+        // `shell_words::split` applies POSIX escaping, so every backslash in a
+        // Windows path was consumed before the file was ever opened: `oo batch`
+        // could not load, plan against, or apply any absolute path on Windows.
+        let cmds = parse_lines(r"plan C:\Users\runneradmin\Temp\ttl\proposed.ttl").unwrap();
+        assert_eq!(cmds[0].name, "plan");
+        assert_eq!(
+            cmds[0].args,
+            vec![r"C:\Users\runneradmin\Temp\ttl\proposed.ttl"]
+        );
+    }
+
+    #[test]
+    fn a_quoted_argument_keeps_its_spaces() {
+        let cmds = parse_lines(r#"load "my ontology.ttl""#).unwrap();
+        assert_eq!(cmds[0].args, vec!["my ontology.ttl"]);
+    }
+
+    #[test]
+    fn a_quoted_windows_path_with_spaces_survives_both_hazards() {
+        let cmds = parse_lines(r#"load "C:\Program Files\onto\my file.ttl""#).unwrap();
+        assert_eq!(cmds[0].args, vec![r"C:\Program Files\onto\my file.ttl"]);
+    }
+
+    #[test]
+    fn a_backslash_escapes_a_quote_inside_a_quoted_argument() {
+        let cmds = parse_lines(r#"query "he said \"hi\"""#).unwrap();
+        assert_eq!(cmds[0].args, vec![r#"he said "hi""#]);
+    }
+
+    #[test]
+    fn single_quotes_take_their_contents_literally() {
+        let cmds = parse_lines(r#"query 'C:\x\y "quoted"'"#).unwrap();
+        assert_eq!(cmds[0].args, vec![r#"C:\x\y "quoted""#]);
+    }
+
+    #[test]
+    fn an_unterminated_quote_is_an_error() {
+        let err = parse_lines(r#"load "unfinished"#).unwrap_err();
+        assert!(err.contains("quot"), "unexpected error: {err}");
     }
 
     #[test]

@@ -1534,7 +1534,11 @@ impl OpenOntologiesServer {
 
     #[tool(name = "onto_plan", description = "Terraform-style plan: diff current store against proposed Turtle. Shows added/removed classes/properties, blast radius, risk score, and locked IRI violations.")]
     pub async fn onto_plan(&self, Parameters(input): Parameters<OntoPlanInput>) -> String {
-        let planner = crate::plan::Planner::new(self.db.clone(), self.graph.clone());
+        let planner = crate::plan::Planner::with_owner(
+            self.db.clone(),
+            self.graph.clone(),
+            &self.session_id,
+        );
         match planner.plan(&input.new_turtle) {
             Ok(result) => {
                 self.lineage().record(&self.session_id, "P", "plan", "computed");
@@ -1547,7 +1551,11 @@ impl OpenOntologiesServer {
     #[tool(name = "onto_apply", description = "Apply a plan produced by onto_plan, defaulting to the most recent one. Pass plan_id to target a specific plan. Modes: 'safe' (clear+reload, checks monitor), 'force' (ignores monitor), 'migrate' (adds owl:equivalentClass/Property bridges for renames).")]
     pub async fn onto_apply(&self, Parameters(input): Parameters<OntoApplyInput>) -> String {
         let mode = input.mode.as_deref().unwrap_or("safe");
-        let planner = crate::plan::Planner::new(self.db.clone(), self.graph.clone());
+        let planner = crate::plan::Planner::with_owner(
+            self.db.clone(),
+            self.graph.clone(),
+            &self.session_id,
+        );
         match planner.apply_plan(input.plan_id.as_deref(), mode) {
             Ok(result) => {
                 self.lineage().record(&self.session_id, "A", "apply", mode);

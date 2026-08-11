@@ -52,6 +52,12 @@ Applies the most recent plan by default. Pass a `plan_id` (`--plan-id` on the
 CLI, `plan_id` to `onto_apply`) to apply a specific one; an id that does not
 match a stored plan is an error rather than a silent fall-back to the latest.
 
+"Most recent" is scoped to whoever computed the plan: one MCP session, or the
+CLI as a whole. A single state db is shared by every session in HTTP mode, so an
+unscoped default would let one session apply changes another was still
+reviewing. Naming a `plan_id` still reaches across deliberately, and the error
+says so when plans exist but belong to someone else.
+
 ```bash
 oo plan proposed.ttl                    # prints plan_id
 oo apply safe --plan-id plan-0a1b2c3d…  # or just: oo apply safe

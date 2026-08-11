@@ -25,10 +25,22 @@ const DELTA_BATCH: usize = 500;
 /// table is trimmed on write rather than left to grow without bound.
 const PLAN_RETENTION: i64 = 100;
 
+/// Owner recorded for plans computed outside an MCP session.
+///
+/// `plan` and `apply` are separate processes with nothing shared between them,
+/// so the CLI's owner has to be a stable constant rather than anything
+/// per-process.
+pub const CLI_OWNER: &str = "cli";
+
 /// Terraform-style plan/apply/migrate for ontology changes.
 pub struct Planner {
     db: StateDb,
     graph: Arc<GraphStore>,
+    /// Who a plan computed here belongs to, and whose plans an `apply` without
+    /// an explicit id will consider. One state db is shared by every MCP
+    /// session and by the CLI, so "the most recent plan" is only a safe default
+    /// within one of them.
+    owner: String,
 }
 
 struct PlanState {
@@ -76,7 +88,16 @@ impl TripleDelta {
 
 impl Planner {
     pub fn new(db: StateDb, graph: Arc<GraphStore>) -> Self {
-        Self { db, graph }
+        Self::with_owner(db, graph, CLI_OWNER)
+    }
+
+    /// A planner whose plans belong to `owner` — an MCP session id, typically.
+    pub fn with_owner(db: StateDb, graph: Arc<GraphStore>, owner: &str) -> Self {
+        Self {
+            db,
+            graph,
+            owner: owner.to_string(),
+        }
     }
 
     /// Compute a diff plan between current store and proposed new Turtle.
@@ -302,10 +323,11 @@ impl Planner {
         let conn = self.db.conn();
         conn.execute(
             "INSERT INTO plans \
-             (plan_id, new_turtle, added_classes, removed_classes, added_properties, removed_properties) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+             (plan_id, owner, new_turtle, added_classes, removed_classes, added_properties, removed_properties) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             rusqlite::params![
                 plan_id,
+                self.owner,
                 new_turtle,
                 serde_json::to_string(added_classes)?,
                 serde_json::to_string(removed_classes)?,
@@ -334,8 +356,8 @@ impl Planner {
                 .optional()?,
             None => conn
                 .query_row(
-                    &format!("SELECT {COLS} FROM plans ORDER BY seq DESC LIMIT 1"),
-                    [],
+                    &format!("SELECT {COLS} FROM plans WHERE owner = ?1 ORDER BY seq DESC LIMIT 1"),
+                    rusqlite::params![self.owner],
                     Self::row_to_plan,
                 )
                 .optional()?,
@@ -345,7 +367,25 @@ impl Planner {
             (None, Some(id)) => anyhow::bail!(
                 "No plan found with id '{id}'. Run plan() first, or omit the id to apply the most recent plan."
             ),
-            (None, None) => anyhow::bail!("No plan found. Run plan() first."),
+            (None, None) => {
+                // Say when plans exist but belong to someone else. Reporting a
+                // bare "no plan" would read as "nothing was ever planned",
+                // which is false and sends the reader after the wrong problem.
+                let others: i64 = conn
+                    .query_row(
+                        "SELECT COUNT(*) FROM plans WHERE owner <> ?1",
+                        rusqlite::params![self.owner],
+                        |r| r.get(0),
+                    )
+                    .unwrap_or(0);
+                if others > 0 {
+                    anyhow::bail!(
+                        "No plan found for this session. Run plan() first. \
+                         ({others} plan(s) belong to another session — pass that plan's id to apply one deliberately.)"
+                    )
+                }
+                anyhow::bail!("No plan found. Run plan() first.")
+            }
         }
     }
 
