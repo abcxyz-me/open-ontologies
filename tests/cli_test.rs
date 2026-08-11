@@ -324,16 +324,20 @@ fn write_plan_fixtures(dir: &tempfile::TempDir) -> (String, String) {
 #[test]
 fn test_cli_batch_plan_then_apply() {
     let dir = tempfile::tempdir().unwrap();
-    let (base, proposed) = write_plan_fixtures(&dir);
-    let batch = dir.path().join("batch.txt");
+    let _ = write_plan_fixtures(&dir);
     std::fs::write(
-        &batch,
-        format!("load {base}\nplan {proposed}\napply safe\nstats\n"),
+        dir.path().join("batch.txt"),
+        "load base.ttl\nplan proposed.ttl\napply safe\nstats\n",
     )
     .unwrap();
 
+    // Relative paths, run from the fixture directory — the reporter's repro
+    // verbatim. Batch lines go through `shell_words::split`, which applies
+    // POSIX escaping, so an absolute Windows path would have its separators
+    // eaten before the file is ever opened.
     let out = oo_isolated(&dir)
-        .args(["batch", batch.to_str().unwrap()])
+        .current_dir(dir.path())
+        .args(["batch", "batch.txt"])
         .output()
         .unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout);
