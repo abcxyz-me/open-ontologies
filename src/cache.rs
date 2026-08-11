@@ -173,6 +173,11 @@ fn sha256(input: &[u8]) -> [u8; 32] {
 /// [`sha256`] copies its whole input into a padded buffer, so hashing a 470 MB
 /// ONNX model through it would allocate roughly twice that. This variant holds
 /// 1 MiB whatever the file size.
+///
+/// Gated with its only caller: `embed_fingerprint` is behind `embeddings`, so
+/// without that feature this is dead code, and the default leg runs
+/// `cargo clippy -- -D warnings`.
+#[cfg(feature = "embeddings")]
 fn sha256_reader<R: std::io::Read>(r: &mut R) -> std::io::Result<[u8; 32]> {
     let mut h = SHA256_H0;
     let mut buf = vec![0u8; 1 << 20];
@@ -230,6 +235,7 @@ fn sha256_reader<R: std::io::Read>(r: &mut R) -> std::io::Result<[u8; 32]> {
 /// Unlike [`SourceFingerprint`], which hashes only a head prefix because a
 /// missed change there costs a re-parse, a missed change here would mean
 /// serving vectors from one model against queries from another.
+#[cfg(feature = "embeddings")]
 pub(crate) fn sha256_file_hex(path: &Path) -> Result<String> {
     let mut file = fs::File::open(path).with_context(|| format!("open({})", path.display()))?;
     let digest = sha256_reader(&mut file).with_context(|| format!("read({})", path.display()))?;
@@ -476,7 +482,7 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "embeddings"))]
 mod sha256_stream_tests {
     use super::*;
 
