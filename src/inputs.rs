@@ -1116,3 +1116,28 @@ pub struct OntoUnpackInput {
     /// Verify the checksum and report the manifest without loading (default false)
     pub verify_only: Option<bool>,
 }
+
+#[derive(Deserialize, JsonSchema)]
+pub struct OntoSupportCheckInput {
+    /// Provenance predicate linking a claim to its source
+    /// (default: prov:wasDerivedFrom)
+    pub prov_predicate: Option<String>,
+    /// Maximum tasks and unsourced examples to return (default 25)
+    pub limit: Option<usize>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+pub struct OntoSupportVerdictInput {
+    /// claim_id from onto_support_check
+    pub claim_id: String,
+    /// supported | refuted | unrelated
+    pub verdict: String,
+    /// Optional note: which passage decided it
+    pub note: Option<String>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+pub struct OntoSupportReportInput {
+    /// Provenance predicate (default: prov:wasDerivedFrom)
+    pub prov_predicate: Option<String>,
+}

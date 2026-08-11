@@ -86,6 +86,13 @@ CREATE TABLE IF NOT EXISTS align_feedback (
 
 CREATE INDEX IF NOT EXISTS idx_align_feedback_iris ON align_feedback(source_iri, target_iri);
 
+CREATE TABLE IF NOT EXISTS support_verdicts (
+    claim_id TEXT PRIMARY KEY,
+    verdict TEXT NOT NULL,
+    note TEXT,
+    timestamp TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS tool_feedback (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     tool TEXT NOT NULL,

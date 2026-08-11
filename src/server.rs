@@ -883,6 +883,36 @@ impl OpenOntologiesServer {
         }
     }
 
+    #[tool(name = "onto_support_check", description = "Check whether the graph's claims are backed by the sources they cite. Returns which claims cite NO source at all (computed, no model needed) and, for those that do, verification TASKS: the claim as a sentence, the source, and what to decide. Read each source and record supported/refuted/unrelated with onto_support_verdict. Complements onto_vocab_check: conformance asks whether a claim is expressible, support asks whether it is true to its source, and a claim can fail either independently.")]
+    async fn onto_support_check(&self, Parameters(input): Parameters<OntoSupportCheckInput>) -> String {
+        use crate::support::SupportChecker;
+        let checker = SupportChecker::new(self.graph.clone(), self.db.clone());
+        match checker.check(input.prov_predicate.as_deref(), input.limit.unwrap_or(25)) {
+            Ok(json) => json,
+            Err(e) => format!(r#"{{"error":"{}"}}"#, e.to_string().replace('"', "'")),
+        }
+    }
+
+    #[tool(name = "onto_support_verdict", description = "Record whether a cited source supports a claim: supported, refuted, or unrelated. Verdicts persist, so onto_support_check skips what has already been judged and onto_support_report can summarise.")]
+    async fn onto_support_verdict(&self, Parameters(input): Parameters<OntoSupportVerdictInput>) -> String {
+        use crate::support::SupportChecker;
+        let checker = SupportChecker::new(self.graph.clone(), self.db.clone());
+        match checker.record_verdict(&input.claim_id, &input.verdict, input.note.as_deref()) {
+            Ok(json) => json,
+            Err(e) => format!(r#"{{"error":"{}"}}"#, e.to_string().replace('"', "'")),
+        }
+    }
+
+    #[tool(name = "onto_support_report", description = "Summarise provenance quality: the unsourced-claim rate over the whole graph, and the support rate across the claims judged so far.")]
+    async fn onto_support_report(&self, Parameters(input): Parameters<OntoSupportReportInput>) -> String {
+        use crate::support::SupportChecker;
+        let checker = SupportChecker::new(self.graph.clone(), self.db.clone());
+        match checker.report(input.prov_predicate.as_deref()) {
+            Ok(json) => json,
+            Err(e) => format!(r#"{{"error":"{}"}}"#, e.to_string().replace('"', "'")),
+        }
+    }
+
     #[tool(name = "onto_pack", description = "Write the loaded graph and its verification evidence to a portable, versioned pack: sorted N-Triples plus a manifest (name, version, counts, timestamp, sha256, and the lint/enforce results recorded at pack time). Use to promote a verified graph between environments as one auditable artifact.")]
     async fn onto_pack(&self, Parameters(input): Parameters<OntoPackInput>) -> String {
         use crate::pack::Packer;
