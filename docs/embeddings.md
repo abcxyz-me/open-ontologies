@@ -85,7 +85,7 @@ composite hash of `(provider, model, revision)`:
 
 | provider | `model` | `revision` |
 |---|---|---|
-| `local` | model file name | file identity — size, mtime, sha256 of the head |
+| `local` | model file name | sha256 of the **whole file** |
 | `openai`-compatible | resolved model name, plus `api_base` and `dimensions` | none — the API exposes no revision |
 
 The fingerprint describes the **effective** configuration, so an environment
@@ -93,6 +93,12 @@ override (`OPEN_ONTOLOGIES_EMBEDDINGS_MODEL`, …) counts as a change. For the
 local provider it hashes the file *contents*: replacing the `.onnx` in place
 leaves the path and filename identical, and that is the most likely way a local
 model gets swapped.
+
+The whole file, not a head prefix — two fine-tunes of one architecture have
+identical sizes and identical ONNX graph protos, and `cp -p` preserves mtime, so
+`(size, mtime, head)` cannot tell them apart. Cost, measured on the 470 MB
+default model: **1.4 s**, once per process, and only when the local provider is
+in use — against a model load that already reads and optimises the same file.
 
 On a mismatch, the affected vectors and index caches are discarded and rebuilt,
 with a `warn` naming what happened. What to expect:

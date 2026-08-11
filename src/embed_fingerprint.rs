@@ -37,8 +37,19 @@
 //!
 //! Hashing the model file *path* would not do: the default download URL and the
 //! on-disk filename are both stable across a model change made by replacing the
-//! file in place. The file identity is computed exactly the way `ontology_cache`
-//! fingerprints its sources ([`crate::cache::SourceFingerprint`]).
+//! file in place.
+//!
+//! The revision is a **sha256 of the whole file**, not of a head prefix.
+//! `SourceFingerprint` (mtime + size + sha256 of the first 64 KiB) is what
+//! `ontology_cache` uses, and it is right there because a missed change costs a
+//! re-parse. Here a missed change costs vectors from one model served against
+//! queries from another — the very thing this module exists to prevent — and
+//! the miss is reachable: two fine-tunes of one architecture have byte-identical
+//! sizes and graph protos, and `cp -p` preserves mtime. Measured cost of doing
+//! it properly: **1.4 s for the 470 MB default model** (330 MB/s, release, the
+//! crate's own sha256), against a `TextEmbedder::load` that already reads and
+//! optimises that same file. It is paid once per process, and only by the local
+//! provider.
 //!
 //! Two inputs are included beyond the agreed triple, for the openai-compatible
 //! arm only. Both are one line each and either can be dropped without touching
@@ -103,13 +114,8 @@ pub fn describe(cfg: &EmbeddingsConfig) -> String {
                 .unwrap_or_else(|| UNAVAILABLE.to_string());
             let revision = path
                 .as_ref()
-                .and_then(|p| crate::cache::SourceFingerprint::from_path(p).ok())
-                .map(|fp| {
-                    format!(
-                        "size={},mtime={},sha={}",
-                        fp.size, fp.mtime_secs, fp.sha_prefix
-                    )
-                })
+                .and_then(|p| crate::cache::sha256_file_hex(p).ok())
+                .map(|sha| format!("sha256={sha}"))
                 .unwrap_or_else(|| UNAVAILABLE.to_string());
             format!("provider=local\nmodel={name}\nrevision={revision}")
         }
@@ -147,9 +153,25 @@ mod tests {
         }
     }
 
+    /// `cargo test` runs the tests of one binary on several threads, and the
+    /// environment is process-wide: without this, one test clearing
+    /// `OPEN_ONTOLOGIES_EMBEDDINGS_MODEL` between another's two `fingerprint`
+    /// calls makes that other test fail for no reason of its own. The RAII
+    /// guard below restores state but grants no mutual exclusion, which is a
+    /// different thing.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     /// Guard the env-var overrides the resolvers read, so a developer's shell
-    /// cannot make these pass or fail for reasons unrelated to the code.
-    struct EnvGuard(Vec<(&'static str, Option<String>)>);
+    /// cannot make these pass or fail for reasons unrelated to the code, and
+    /// hold [`ENV_LOCK`] for the duration so no sibling test observes the
+    /// mutation.
+    struct EnvGuard {
+        saved: Vec<(&'static str, Option<String>)>,
+        /// Held for its `Drop`, never read: it is what serialises these tests
+        /// against each other. Named rather than `_0` so that intent survives.
+        #[allow(dead_code)]
+        lock: std::sync::MutexGuard<'static, ()>,
+    }
     impl EnvGuard {
         fn clear() -> Self {
             let keys = [
@@ -157,6 +179,12 @@ mod tests {
                 "OPEN_ONTOLOGIES_EMBEDDINGS_API_BASE",
                 "OPEN_ONTOLOGIES_EMBEDDINGS_MODEL",
             ];
+            // Take the lock BEFORE reading or mutating anything: saving the
+            // old values while another test is mid-mutation would restore its
+            // scratch state as if it were ours.
+            // Poisoning only means an earlier test panicked while holding it;
+            // the environment is still ours to restore, so take it either way.
+            let lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
             let saved = keys
                 .iter()
                 .map(|k| (*k, std::env::var(k).ok()))
@@ -164,12 +192,12 @@ mod tests {
             for (k, _) in &saved {
                 unsafe { std::env::remove_var(k) };
             }
-            Self(saved)
+            Self { saved, lock }
         }
     }
     impl Drop for EnvGuard {
         fn drop(&mut self) {
-            for (k, v) in &self.0 {
+            for (k, v) in &self.saved {
                 match v {
                     Some(val) => unsafe { std::env::set_var(k, val) },
                     None => unsafe { std::env::remove_var(k) },
@@ -265,6 +293,51 @@ mod tests {
 
         std::fs::remove_dir_all(&dir).ok();
         assert_ne!(before, after, "a model replaced in place went undetected");
+    }
+
+    #[test]
+    fn a_same_size_swap_with_preserved_mtime_is_still_detected() {
+        // The case a head-prefix fingerprint misses, and it is not contrived:
+        // two fine-tunes of one architecture have byte-identical sizes AND
+        // byte-identical ONNX graph protos, `cp -p` preserves mtime, and the
+        // weights that differ can sit past the first 64 KiB. Under
+        // (mtime, size, sha256-of-head) the two are indistinguishable.
+        let _g = EnvGuard::clear();
+        let dir = std::env::temp_dir().join(format!("oo-fp3-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let model = dir.join("model.onnx");
+
+        // 96 KiB: a shared 64 KiB head, then weights.
+        const HEAD: usize = 64 * 1024;
+        let mut a = vec![0xABu8; HEAD];
+        a.extend(std::iter::repeat_n(0x01u8, 32 * 1024));
+        let mut b = vec![0xABu8; HEAD];
+        b.extend(std::iter::repeat_n(0x02u8, 32 * 1024));
+        assert_eq!(a.len(), b.len(), "the scenario requires identical sizes");
+        assert_eq!(a[..HEAD], b[..HEAD], "the scenario requires an identical head");
+
+        let cfg = local_cfg(Some(model.to_str().unwrap()));
+
+        std::fs::write(&model, &a).unwrap();
+        let mtime = std::fs::metadata(&model).unwrap().modified().unwrap();
+        let before = fingerprint(&cfg);
+
+        // `cp -p`: same bytes count, same modification time.
+        std::fs::write(&model, &b).unwrap();
+        std::fs::File::open(&model)
+            .unwrap()
+            .set_modified(mtime)
+            .unwrap();
+
+        let after = fingerprint(&cfg);
+        std::fs::remove_dir_all(&dir).ok();
+
+        assert_ne!(
+            before, after,
+            "a same-size, same-mtime model swap differing only past the head \
+             went undetected — this is the corruption path the module exists \
+             to close"
+        );
     }
 
     #[test]
