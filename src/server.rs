@@ -883,6 +883,45 @@ impl OpenOntologiesServer {
         }
     }
 
+    #[tool(name = "onto_pack", description = "Write the loaded graph and its verification evidence to a portable, versioned pack: sorted N-Triples plus a manifest (name, version, counts, timestamp, sha256, and the lint/enforce results recorded at pack time). Use to promote a verified graph between environments as one auditable artifact.")]
+    async fn onto_pack(&self, Parameters(input): Parameters<OntoPackInput>) -> String {
+        use crate::pack::Packer;
+        let name = input.name.unwrap_or_else(|| {
+            std::path::Path::new(&input.path)
+                .file_stem().and_then(|s| s.to_str()).unwrap_or("pack").to_string()
+        });
+        // Evidence is gathered here, at pack time, so the artifact records
+        // what the graph passed rather than asking the receiver to trust it.
+        let evidence = if input.include_evidence.unwrap_or(true) {
+            let lint = self.graph.serialize("turtle").ok()
+                .and_then(|ttl| crate::ontology::OntologyService::lint(&ttl).ok());
+            let enforce = crate::enforce::Enforcer::new(self.db.clone(), self.graph.clone())
+                .enforce("generic").ok();
+            Some(serde_json::json!({
+                "lint": lint.and_then(|l| serde_json::from_str::<serde_json::Value>(l.as_str()).ok()),
+                "enforce_generic": enforce.and_then(|e| serde_json::from_str::<serde_json::Value>(e.as_str()).ok()),
+            }))
+        } else {
+            None
+        };
+        match Packer::new(self.graph.clone()).pack(
+            &input.path, &name,
+            &input.version.unwrap_or_else(|| "1.0.0".into()), evidence,
+        ) {
+            Ok(json) => json,
+            Err(e) => format!(r#"{{"error":"{}"}}"#, e.to_string().replace('"', "'")),
+        }
+    }
+
+    #[tool(name = "onto_unpack", description = "Load a pack written by onto_pack, refusing it if the checksum does not match. Pass verify_only to inspect the manifest and evidence without loading.")]
+    async fn onto_unpack(&self, Parameters(input): Parameters<OntoUnpackInput>) -> String {
+        use crate::pack::Packer;
+        match Packer::new(self.graph.clone()).unpack(&input.path, input.verify_only.unwrap_or(false)) {
+            Ok(json) => json,
+            Err(e) => format!(r#"{{"error":"{}"}}"#, e.to_string().replace('"', "'")),
+        }
+    }
+
     #[tool(name = "onto_communities", description = "Detect communities in the loaded entity graph and return a SKELETON per community: size, top members by degree, internal relations, and the bridges connecting it to other communities. Deterministic label propagation, no model involved. Use the skeletons to write one report per community, then answer corpus-wide questions (themes, overview, what is this corpus about) by reasoning over the reports instead of traversing from an anchor entity.")]
     async fn onto_communities(&self, Parameters(input): Parameters<OntoCommunitiesInput>) -> String {
         use crate::communities::Communities;

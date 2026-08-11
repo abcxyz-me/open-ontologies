@@ -1096,3 +1096,23 @@ pub struct OntoCommunitiesInput {
     /// How many members, relations and bridges to describe per community (default 8)
     pub top_members: Option<usize>,
 }
+
+#[derive(Deserialize, JsonSchema)]
+pub struct OntoPackInput {
+    /// Where to write the pack
+    pub path: String,
+    /// Pack name (default: the file stem)
+    pub name: Option<String>,
+    /// Version string (default: "1.0.0")
+    pub version: Option<String>,
+    /// Record lint and enforce results in the manifest as evidence (default true)
+    pub include_evidence: Option<bool>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+pub struct OntoUnpackInput {
+    /// Pack to read
+    pub path: String,
+    /// Verify the checksum and report the manifest without loading (default false)
+    pub verify_only: Option<bool>,
+}
