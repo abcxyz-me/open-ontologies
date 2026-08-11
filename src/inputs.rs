@@ -301,6 +301,8 @@ pub struct OntoPlanInput {
 pub struct OntoApplyInput {
     /// Apply mode: "safe" (default), "force" (ignores monitor), "migrate" (adds bridges)
     pub mode: Option<String>,
+    /// Plan to apply, as returned by `onto_plan`. Defaults to the most recent plan.
+    pub plan_id: Option<String>,
 }
 
 #[derive(Deserialize, JsonSchema)]

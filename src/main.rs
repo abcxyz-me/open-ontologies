@@ -422,6 +422,9 @@ enum Commands {
     Apply {
         #[arg(default_value = "safe")]
         mode: String,
+        /// Plan to apply, as printed by `plan`. Defaults to the most recent plan.
+        #[arg(long)]
+        plan_id: Option<String>,
     },
     /// Lock IRIs to prevent removal
     Lock {
@@ -1917,11 +1920,11 @@ async fn async_main() -> anyhow::Result<()> {
                 .unwrap_or_else(|e| format!(r#"{{"error":"{}"}}"#, e));
             output_result(&result, cli.pretty);
         }
-        Commands::Apply { mode } => {
+        Commands::Apply { mode, plan_id } => {
             let (db, graph) = setup(&cli.data_dir)?;
             let planner = open_ontologies::plan::Planner::new(db, graph);
             let result = planner
-                .apply(&mode)
+                .apply_plan(plan_id.as_deref(), &mode)
                 .unwrap_or_else(|e| format!(r#"{{"error":"{}"}}"#, e));
             output_result(&result, cli.pretty);
         }

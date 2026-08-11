@@ -131,6 +131,19 @@ CREATE TABLE IF NOT EXISTS ontology_cache (
     compiled_at TEXT NOT NULL DEFAULT (datetime('now')),
     last_access_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+CREATE TABLE IF NOT EXISTS plans (
+    seq INTEGER PRIMARY KEY AUTOINCREMENT,
+    plan_id TEXT NOT NULL UNIQUE,
+    new_turtle TEXT NOT NULL,
+    added_classes TEXT NOT NULL,
+    removed_classes TEXT NOT NULL,
+    added_properties TEXT NOT NULL,
+    removed_properties TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    applied_at TEXT,
+    applied_mode TEXT
+);
 ";
 
 /// A column an upgrade adds to an existing table.

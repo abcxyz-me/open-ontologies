@@ -288,9 +288,14 @@ impl BatchRunner {
     }
 
     fn exec_apply(&self, args: &[String]) -> Value {
-        let mode = args.first().map(|s| s.as_str()).unwrap_or("safe");
+        let plan_id = Self::flag_value(args, "--plan-id");
+        let mode = args
+            .iter()
+            .find(|a| !a.starts_with("--") && Some(a.as_str()) != plan_id.as_deref())
+            .map(|s| s.as_str())
+            .unwrap_or("safe");
         let planner = crate::plan::Planner::new(self.db.clone(), self.graph.clone());
-        let result = planner.apply(mode)
+        let result = planner.apply_plan(plan_id.as_deref(), mode)
             .unwrap_or_else(|e| format!(r#"{{"error":"{}"}}"#, e));
         serde_json::from_str(&result).unwrap_or(json!({"raw": result}))
     }
