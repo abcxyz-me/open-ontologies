@@ -199,6 +199,11 @@ pub struct OntoIngestInput {
     pub inline_mapping: Option<bool>,
     /// Base IRI for generated instances (default: http://example.org/data/)
     pub base_iri: Option<String>,
+    /// Emit PROV-O provenance: each generated subject gets
+    /// prov:wasDerivedFrom the source file, with a prov:Entity for the file
+    /// carrying its path and ingestion timestamp. Interoperates with
+    /// platforms that expect PROV-O (Semantica, TrustGraph). Default false.
+    pub provenance: Option<bool>,
 }
 
 #[derive(Deserialize, JsonSchema)]

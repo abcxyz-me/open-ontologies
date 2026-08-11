@@ -833,7 +833,42 @@ impl OpenOntologiesServer {
         };
 
         // Convert to N-Triples and load
-        let ntriples = mapping.rows_to_ntriples(&rows);
+        let mut ntriples = mapping.rows_to_ntriples(&rows);
+
+        // PROV-O: where did each of these subjects come from. Every fact
+        // carrying its source is what makes a graph auditable later, and it
+        // is the interop shape other platforms expect.
+        let mut prov_triples = 0usize;
+        if input.provenance.unwrap_or(false) {
+            if !ntriples.is_empty() && !ntriples.ends_with('\n') {
+                ntriples.push('\n');
+            }
+            const PROV_DERIVED: &str = "<http://www.w3.org/ns/prov#wasDerivedFrom>";
+            let source_iri = format!("{}source/{}", base_iri,
+                std::path::Path::new(&input.path)
+                    .file_name().and_then(|n| n.to_str()).unwrap_or("data")
+                    .replace(|c: char| !c.is_alphanumeric() && c != '.' && c != '-' && c != '_', "_"));
+            let mut extra = String::new();
+            extra.push_str(&format!(
+                "<{source_iri}> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/prov#Entity> .\n"));
+            extra.push_str(&format!(
+                "<{source_iri}> <http://www.w3.org/2000/01/rdf-schema#label> {} .\n",
+                serde_json::to_string(&input.path).unwrap_or_else(|_| "\"source\"".into())));
+            extra.push_str(&format!(
+                "<{source_iri}> <http://www.w3.org/ns/prov#generatedAtTime> \"{}\"^^<http://www.w3.org/2001/XMLSchema#dateTime> .\n",
+                chrono::Utc::now().to_rfc3339()));
+            let mut seen = std::collections::HashSet::new();
+            for line in ntriples.lines() {
+                if let Some(subject) = line.split_whitespace().next() {
+                    if subject.starts_with('<') && seen.insert(subject.to_string()) {
+                        extra.push_str(&format!("{subject} {PROV_DERIVED} <{source_iri}> .\n"));
+                    }
+                }
+            }
+            prov_triples = extra.lines().count();
+            ntriples.push_str(&extra);
+        }
+
         match self.graph.load_ntriples(&ntriples) {
             Ok(count) => {
                 serde_json::json!({
@@ -841,6 +876,7 @@ impl OpenOntologiesServer {
                     "triples_loaded": count,
                     "rows_processed": rows.len(),
                     "mapping_fields": mapping.mappings.len(),
+                    "provenance_triples": prov_triples,
                 }).to_string()
             }
             Err(e) => format!(r#"{{"error":"Failed to load triples: {}"}}"#, e),
