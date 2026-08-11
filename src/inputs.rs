@@ -1060,3 +1060,26 @@ mod tests {
         assert!(parsed.struct_dim.is_none());
     }
 }
+
+#[derive(Deserialize, JsonSchema)]
+pub struct OntoOssieImportInput {
+    /// Path to an Apache Ossie ontology document (YAML or JSON) OR the document
+    /// content itself when `inline` is true.
+    pub source: String,
+    /// If true, treat `source` as inline document content rather than a file path.
+    pub inline: Option<bool>,
+    /// Base IRI to mint terms under. Defaults to
+    /// `https://ossie.apache.org/ontology/{document name}#`.
+    pub base_iri: Option<String>,
+    /// If true (the default), emit SHACL shapes alongside the OWL. The shapes
+    /// carry the constraints OWL 2 DL cannot state, so turning this off loses
+    /// every OneToOne identifier and every n-ary multiplicity in the source.
+    pub emit_shacl: Option<bool>,
+    /// If true, load the compiled graph into the active ontology store so the
+    /// other tools (`onto_reason`, `onto_shacl`, `onto_tableaux`, `onto_query`)
+    /// can work on it. Defaults to false.
+    pub load: Option<bool>,
+    /// If true, return the full Turtle in the response. Defaults to false, which
+    /// returns only the statistics and the unenforceable-construct report.
+    pub include_turtle: Option<bool>,
+}

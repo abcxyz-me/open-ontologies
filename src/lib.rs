@@ -46,6 +46,7 @@ pub mod mapping;
 pub mod marketplace;
 pub mod monitor;
 pub mod ontology;
+pub mod ossie;
 pub mod plan;
 pub mod plan_classical;
 pub mod plan_pddl;
