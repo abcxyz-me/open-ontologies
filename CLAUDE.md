@@ -72,6 +72,7 @@ Claude dynamically decides the next tool call based on what the previous tool re
 | `onto_shacl` | To validate loaded data against SHACL shapes (cardinality, datatypes, classes) |
 | `onto_vocab_check` | To closed-world-check generated DATA: flags any predicate/class used that is not declared in the loaded ontology (hallucinated terms). Catches what open-world SHACL silently passes. Run on LLM-generated Turtle before `onto_load` |
 | `onto_reason` | To run RDFS or OWL-RL inference, materializing inferred triples |
+| `onto_reason_incremental` | After adding facts to an already-materialised graph. Derives the consequences of the ADDED triples only (semi-naive evaluation, joining the delta against the closure), so the cost tracks what changed rather than the size of the store: effectively instant against a 1.9M-triple store where full re-materialisation takes seconds. Refuses schema axioms (subClassOf, domain, range, inverseOf, equivalentClass) with an explanation, because those change what the whole store entails: run `onto_reason` for them |
 | `onto_extend` | To run the full pipeline: ingest → SHACL validate → reason in one call |
 | `onto_import_schema` | To import a PostgreSQL or DuckDB database schema as an OWL ontology (requires `postgres` and/or `duckdb` features). Auto-dispatches on connection-string scheme. |
 | `onto_plan` | Before applying changes — shows added/removed classes, blast radius, risk score |

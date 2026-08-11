@@ -1141,3 +1141,11 @@ pub struct OntoSupportReportInput {
     /// Provenance predicate (default: prov:wasDerivedFrom)
     pub prov_predicate: Option<String>,
 }
+
+#[derive(Deserialize, JsonSchema)]
+pub struct OntoReasonIncrementalInput {
+    /// The added triples as N-Triples: what to derive consequences of
+    pub delta: String,
+    /// Write the inferences into the store (default true)
+    pub materialize: Option<bool>,
+}

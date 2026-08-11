@@ -885,6 +885,19 @@ impl OpenOntologiesServer {
         }
     }
 
+    #[tool(name = "onto_reason_incremental", description = "Derive the consequences of newly added triples WITHOUT recomputing the whole closure. Pass the added triples as N-Triples in `delta`; the engine joins them against the existing closure (semi-naive evaluation), so the work is proportional to what changed rather than to the size of the store. Use after adding facts to an already-materialised graph. Adding SCHEMA axioms (subClassOf, domain, range, inverseOf, equivalentClass) changes what the whole store entails and is refused with an explanation: run onto_reason for those.")]
+    async fn onto_reason_incremental(&self, Parameters(input): Parameters<OntoReasonIncrementalInput>) -> String {
+        use crate::reason_incremental::{parse_ntriples, IncrementalReasoner};
+        let delta = parse_ntriples(&input.delta);
+        if delta.is_empty() {
+            return r#"{"error":"delta parsed to no triples: expected N-Triples"}"#.to_string();
+        }
+        match IncrementalReasoner::run(&self.graph, &delta, input.materialize.unwrap_or(true)) {
+            Ok(json) => json,
+            Err(e) => format!(r#"{{"error":"{}"}}"#, e.to_string().replace('"', "'")),
+        }
+    }
+
     #[tool(name = "onto_support_check", description = "Check whether the graph's claims are backed by the sources they cite. Returns which claims cite NO source at all (computed, no model needed) and, for those that do, verification TASKS: the claim as a sentence, the source, and what to decide. Read each source and record supported/refuted/unrelated with onto_support_verdict. Complements onto_vocab_check: conformance asks whether a claim is expressible, support asks whether it is true to its source, and a claim can fail either independently.")]
     async fn onto_support_check(&self, Parameters(input): Parameters<OntoSupportCheckInput>) -> String {
         use crate::support::SupportChecker;

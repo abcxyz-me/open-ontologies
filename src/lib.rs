@@ -57,6 +57,7 @@ pub mod plan_validate;
 #[cfg(feature = "embeddings")]
 pub mod poincare;
 pub mod reason;
+pub mod reason_incremental;
 pub mod registry;
 pub mod repo;
 pub mod runtime;

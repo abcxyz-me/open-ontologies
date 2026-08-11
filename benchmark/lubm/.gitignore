@@ -6,4 +6,5 @@ classes/
 src/
 uba.zip
 *.owl
+*.merged.ttl
 log.txt
