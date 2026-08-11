@@ -103,13 +103,17 @@ impl GraphStore {
         if let Some(base) = base_iri {
             parser = parser.with_base_iri(base)?;
         }
-        let quads_iter = parser.for_reader(reader);
-        let mut count = 0;
-        for quad in quads_iter {
-            store.insert(&quad?)?;
-            count += 1;
+        // Parse the whole document BEFORE touching the store. Streaming
+        // inserts left every quad before the first syntax error in place, so
+        // a failed load produced a silently partial graph that looked exactly
+        // like a small one (issue #93). All or nothing.
+        let quads: Vec<_> = parser
+            .for_reader(reader)
+            .collect::<Result<_, _>>()?;
+        for quad in &quads {
+            store.insert(quad)?;
         }
-        Ok(count)
+        Ok(quads.len())
     }
 
     /// Load RDF content in a specified format (Turtle, RDF/XML, etc.)
@@ -125,13 +129,14 @@ impl GraphStore {
         if let Some(base) = base_iri {
             parser = parser.with_base_iri(base)?;
         }
-        let parser = parser.for_reader(reader);
-        let mut count = 0;
-        for quad in parser {
-            store.insert(&quad?)?;
-            count += 1;
+        // All or nothing: see load_turtle (issue #93).
+        let quads: Vec<_> = parser
+            .for_reader(reader)
+            .collect::<Result<_, _>>()?;
+        for quad in &quads {
+            store.insert(quad)?;
         }
-        Ok(count)
+        Ok(quads.len())
     }
 
     pub fn load_file(&self, path: &str) -> anyhow::Result<usize> {
@@ -139,13 +144,14 @@ impl GraphStore {
         let format = Self::detect_format_sniffed(path, &content);
         let store = self.store.lock().unwrap();
         let reader = Cursor::new(content.as_bytes());
-        let parser = RdfParser::from_format(format).for_reader(reader);
-        let mut count = 0;
-        for quad in parser {
-            store.insert(&quad?)?;
-            count += 1;
+        // All or nothing: see load_turtle (issue #93).
+        let quads: Vec<_> = RdfParser::from_format(format)
+            .for_reader(reader)
+            .collect::<Result<_, _>>()?;
+        for quad in &quads {
+            store.insert(quad)?;
         }
-        Ok(count)
+        Ok(quads.len())
     }
 
     pub fn save_file(&self, path: &str, format: &str) -> anyhow::Result<()> {
