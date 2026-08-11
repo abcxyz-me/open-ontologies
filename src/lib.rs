@@ -12,6 +12,7 @@ pub mod civex_pywhy;
 pub mod classify_el;
 pub mod clinical;
 pub mod coevolve;
+pub mod communities;
 pub mod config;
 pub mod cq;
 pub mod drift;

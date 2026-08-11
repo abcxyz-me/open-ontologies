@@ -883,6 +883,16 @@ impl OpenOntologiesServer {
         }
     }
 
+    #[tool(name = "onto_communities", description = "Detect communities in the loaded entity graph and return a SKELETON per community: size, top members by degree, internal relations, and the bridges connecting it to other communities. Deterministic label propagation, no model involved. Use the skeletons to write one report per community, then answer corpus-wide questions (themes, overview, what is this corpus about) by reasoning over the reports instead of traversing from an anchor entity.")]
+    async fn onto_communities(&self, Parameters(input): Parameters<OntoCommunitiesInput>) -> String {
+        use crate::communities::Communities;
+        let detector = Communities::new(self.graph.clone());
+        match detector.detect(input.min_size.unwrap_or(3), input.top_members.unwrap_or(8)) {
+            Ok(json) => json,
+            Err(e) => format!(r#"{{"error":"{}"}}"#, e.to_string().replace('"', "'")),
+        }
+    }
+
     #[tool(name = "onto_map", description = "Generate a mapping config by inspecting a data file's schema against the currently loaded ontology. Returns a JSON mapping that can be reviewed and passed to onto_ingest.")]
     async fn onto_map(&self, Parameters(input): Parameters<OntoMapInput>) -> String {
         use crate::ingest::DataIngester;

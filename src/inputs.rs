@@ -1088,3 +1088,11 @@ pub struct OntoOssieImportInput {
     /// returns only the statistics and the unenforceable-construct report.
     pub include_turtle: Option<bool>,
 }
+
+#[derive(Deserialize, JsonSchema)]
+pub struct OntoCommunitiesInput {
+    /// Ignore communities smaller than this (default 3)
+    pub min_size: Option<usize>,
+    /// How many members, relations and bridges to describe per community (default 8)
+    pub top_members: Option<usize>,
+}
