@@ -1096,9 +1096,12 @@ async fn async_main() -> anyhow::Result<()> {
             // can no longer be built with a struct literal from this crate. Start
             // from Default and set the public fields we care about.
             #[allow(clippy::field_reassign_with_default)]
-            let mut http_config = StreamableHttpServerConfig::default();
-            http_config.stateful_mode = cfg.http.stateful_mode;
-            http_config.cancellation_token = ct.clone();
+            let http_config = {
+                let mut c = StreamableHttpServerConfig::default();
+                c.stateful_mode = cfg.http.stateful_mode;
+                c.cancellation_token = ct.clone();
+                c
+            };
 
             let shared_graph_for_service = shared_graph.clone();
             let gw_for_service = governance_webhook.clone();
