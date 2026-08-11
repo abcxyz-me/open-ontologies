@@ -62,8 +62,7 @@ fn strip(value: &str) -> String {
     if v.starts_with('<') && v.ends_with('>') {
         return v[1..v.len() - 1].to_string();
     }
-    if v.starts_with('"') {
-        let body = &v[1..];
+    if let Some(body) = v.strip_prefix('"') {
         for cut in ["\"^^", "\"@", "\""] {
             if let Some(i) = body.find(cut) {
                 return body[..i].to_string();

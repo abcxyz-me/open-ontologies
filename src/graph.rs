@@ -144,8 +144,20 @@ impl GraphStore {
         let format = Self::detect_format_sniffed(path, &content);
         let store = self.store.lock().unwrap();
         let reader = Cursor::new(content.as_bytes());
+
+        // A document's own location is its default base, per RFC 3986. Without
+        // it, any file using relative IRIs fails to parse at all, which is
+        // most published RDF/XML: LUBM's generated data would not load a
+        // single triple before this.
+        let base = std::fs::canonicalize(path)
+            .ok()
+            .and_then(|abs| abs.to_str().map(|s| format!("file://{s}")));
         // All or nothing: see load_turtle (issue #93).
-        let quads: Vec<_> = RdfParser::from_format(format)
+        let mut parser = RdfParser::from_format(format);
+        if let Some(p) = base.as_ref().and_then(|b| parser.clone().with_base_iri(b).ok()) {
+            parser = p;
+        }
+        let quads: Vec<_> = parser
             .for_reader(reader)
             .collect::<Result<_, _>>()?;
         for quad in &quads {

@@ -160,8 +160,9 @@ impl Communities {
                     }
                 } else if si || oi {
                     let (from, to) = if si { (s, o) } else { (o, s) };
-                    if let Some(&other) = community_of.get(to.as_str()) {
-                        if other != id && bridges.len() < top_members {
+                    let other = community_of.get(to.as_str()).copied();
+                    if let Some(other) = other.filter(|&c| c != id && bridges.len() < top_members) {
+                        {
                             bridges.push(Bridge {
                                 from: short(from),
                                 predicate: local_name(p).to_string(),
@@ -244,7 +245,7 @@ impl Communities {
                 };
                 let mut best = current;
                 let mut best_gain = gain(current);
-                for (&c, _) in &links {
+                for &c in links.keys() {
                     let g = gain(c);
                     if g > best_gain + 1e-12 || (g > best_gain - 1e-12 && c < best) {
                         best = c;
@@ -328,8 +329,7 @@ fn strip(value: &str) -> String {
     if v.starts_with('<') && v.ends_with('>') {
         return v[1..v.len() - 1].to_string();
     }
-    if v.starts_with('"') {
-        let body = &v[1..];
+    if let Some(body) = v.strip_prefix('"') {
         for cut in ["\"^^", "\"@", "\""] {
             if let Some(i) = body.find(cut) {
                 return body[..i].to_string();

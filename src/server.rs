@@ -859,10 +859,12 @@ impl OpenOntologiesServer {
                 chrono::Utc::now().to_rfc3339()));
             let mut seen = std::collections::HashSet::new();
             for line in ntriples.lines() {
-                if let Some(subject) = line.split_whitespace().next() {
-                    if subject.starts_with('<') && seen.insert(subject.to_string()) {
-                        extra.push_str(&format!("{subject} {PROV_DERIVED} <{source_iri}> .\n"));
-                    }
+                if let Some(subject) = line
+                    .split_whitespace()
+                    .next()
+                    .filter(|s| s.starts_with('<') && seen.insert(s.to_string()))
+                {
+                    extra.push_str(&format!("{subject} {PROV_DERIVED} <{source_iri}> .\n"));
                 }
             }
             prov_triples = extra.lines().count();
