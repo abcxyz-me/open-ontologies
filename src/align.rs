@@ -784,14 +784,17 @@ impl AlignmentEngine {
 
     /// Classify the relation type based on signal strengths.
     fn classify_relation(label_sim: f64, prop_overlap: f64, parent_overlap: f64) -> &'static str {
+        // The strength of the claim must track the strength of the evidence.
+        // Handing exactMatch to every mid-similarity pair produces a wall of
+        // identical proposals and overstates what a bare name resemblance
+        // justifies: names alone at mid similarity warrant closeMatch, and
+        // only structural agreement upgrades the claim.
         if label_sim > 0.8 && prop_overlap > 0.5 {
             "owl:equivalentClass"
         } else if label_sim > 0.8 {
             "skos:exactMatch"
         } else if parent_overlap > 0.5 {
             "rdfs:subClassOf"
-        } else if label_sim > 0.6 {
-            "skos:exactMatch"
         } else {
             "skos:closeMatch"
         }
