@@ -29,6 +29,8 @@ pub mod shape_combinatorics;
 #[cfg(feature = "embeddings")]
 pub mod embed;
 #[cfg(feature = "embeddings")]
+pub mod embed_fingerprint;
+#[cfg(feature = "embeddings")]
 pub mod embed_remote;
 pub mod enforce;
 pub mod feedback;

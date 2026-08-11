@@ -139,7 +139,16 @@ impl OpenOntologiesServer {
 
         #[cfg(feature = "embeddings")]
         let (vecstore, text_embedder) = {
-            let mut vs = crate::vecstore::VecStore::new(db.clone());
+            // Set the fingerprint BEFORE `load_from_db`: the load path is where
+            // a configuration change is detected, and detecting it afterwards
+            // would mean the incompatible vectors are already in memory and
+            // about to be searched.
+            let mut vs = crate::vecstore::VecStore::new(db.clone())
+                .with_embeddings_fingerprint(crate::embed_fingerprint::fingerprint(&_embed_config));
+            tracing::debug!(
+                "embedding configuration fingerprint: {}",
+                crate::embed_fingerprint::describe(&_embed_config)
+            );
             let _ = vs.load_from_db();
 
             let embedder = match crate::embed::TextEmbedderProvider::from_config(&_embed_config) {

@@ -96,12 +96,19 @@ CREATE TABLE IF NOT EXISTS tool_feedback (
 );
 CREATE INDEX IF NOT EXISTS idx_tool_feedback ON tool_feedback(tool, rule_id, entity);
 
+-- `model_fp` is a composite hash of the embedding configuration that produced
+-- the vectors — see src/embed_fingerprint.rs. It is what catches a model or
+-- provider swap that keeps the same dimension: `text_dim` still matches and the
+-- bytes are unchanged, so nothing else notices. Nullable, because rows written
+-- before this column existed have no answer, and unknown must stay
+-- distinguishable from known-and-equal.
 CREATE TABLE IF NOT EXISTS embeddings (
     iri TEXT PRIMARY KEY,
     text_vec BLOB NOT NULL,
     struct_vec BLOB NOT NULL,
     text_dim INTEGER NOT NULL,
     struct_dim INTEGER NOT NULL,
+    model_fp TEXT,
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -110,11 +117,18 @@ CREATE TABLE IF NOT EXISTS embeddings (
 -- index variants (Poincare, product) can coexist. `entries_hash` is a
 -- fingerprint of the (iri, text_vec) set the index was built from; if it
 -- changes we know the cached index is stale and must be rebuilt.
+--
+-- `model_fp` catches what `entries_hash` structurally cannot. With zero new
+-- entities, a model swap leaves every stored vector old-model while every query
+-- vector is new-model: the entry set is byte-identical, `entries_hash` is
+-- unchanged, and the comparison is meaningless anyway. The two checks are kept
+-- side by side because they detect different failures and both are cheap.
 CREATE TABLE IF NOT EXISTS hnsw_index_cache (
     kind TEXT PRIMARY KEY,
     entries_hash BLOB NOT NULL,
     entry_count INTEGER NOT NULL,
     serialised BLOB NOT NULL,
+    model_fp TEXT,
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -180,10 +194,26 @@ const MIGRATIONS: &[Migration] = &[
             ddl: "ALTER TABLE align_feedback ADD COLUMN signals_json TEXT",
         }],
     },
+    Migration {
+        version: 3,
+        description: "embedding model fingerprint on vectors and index cache",
+        columns: &[
+            ColumnAddition {
+                table: "embeddings",
+                column: "model_fp",
+                ddl: "ALTER TABLE embeddings ADD COLUMN model_fp TEXT",
+            },
+            ColumnAddition {
+                table: "hnsw_index_cache",
+                column: "model_fp",
+                ddl: "ALTER TABLE hnsw_index_cache ADD COLUMN model_fp TEXT",
+            },
+        ],
+    },
 ];
 
 /// Schema version a freshly-opened database is brought up to.
-pub const SCHEMA_VERSION: i64 = 2;
+pub const SCHEMA_VERSION: i64 = 3;
 
 /// Modelling-buffer vault: surrogate to original mappings, per session.
 ///

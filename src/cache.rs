@@ -66,7 +66,7 @@ impl SourceFingerprint {
 /// implementation over adding a new dependency tree just for the cache key.
 /// If this hash is ever reused for an authenticity-sensitive purpose,
 /// switch the call sites to `sha2` first.
-fn sha256_hex(input: &[u8]) -> String {
+pub(crate) fn sha256_hex(input: &[u8]) -> String {
     let digest = sha256(input);
     let mut s = String::with_capacity(64);
     for b in digest.iter() {
